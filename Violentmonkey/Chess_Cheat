@@ -1,0 +1,2277 @@
+// ==UserScript==
+// @name         Chess Cheats
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
+// @author       UwU (Chess + Roblox Scripts)
+// @match        *://www.chess.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=chess.com
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        unsafeWindow
+// @connect      cdnjs.cloudflare.com
+// @connect      cdn.jsdelivr.net
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- CONFIG ---
+    const DISCORD_LINK = "https://discord.gg/sys883Dx";
+    const YOUTUBE_LINK = "https://www.youtube.com/@TênanhlàDúiHọanhlàThái";
+    const ACCESS_KEY = "ChessHackV1";
+    const GUI_IMAGE = "https://repository-images.githubusercontent.com/633213733/43fe45c6-9da6-4fb7-9c33-f70a3d65504d";
+    const BANNER_IMAGE = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ6s410zzq8BghrZnpxlaGegMAzFF5US_8sOg&s";
+    const DISCORD_ICON = "https://cdn-icons-png.flaticon.com/512/3670/3670157.png";
+    const STOCKFISH_URL = "https://cdn.jsdelivr.net/npm/stockfish@11/stockfish.js";
+    const FALLBACK_URL = "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js";
+    
+    let engine = null;
+    let lastFen = "";
+    let lastAnalyzedTurn = null;
+    let lastBestMove = "";
+    let lastPvMoves = [];
+    let isScriptEnabled = true;
+    let showArrows = true;
+    let autoAnalyze = true;
+    let guiCollapsed = false;
+    let playerColor = null;
+    let lastPlayerColorSource = "unknown";
+    let activeTab = 'main';
+    let warningAcknowledged = false;
+    let accessUnlocked = false;
+    let youtubeVisitStartedAt = 0;
+    let youtubeVerified = false;
+    const AUTH_STATE = Object.freeze({
+        IDLE: 'idle',
+        SCANNING: 'scanning',
+        VERIFIED: 'verified',
+        FAILED: 'failed',
+        ERROR: 'error'
+    });
+    const ANALYZE_STATE = Object.freeze({
+        IDLE: 'idle',
+        SCANNING: 'scanning',
+        VERIFIED: 'verified',
+        FAILED: 'failed',
+        ERROR: 'error'
+    });
+    let authState = AUTH_STATE.IDLE;
+    let analyzeState = ANALYZE_STATE.IDLE;
+    let activeAnalyzeToken = 0;
+    let analyzeTimeoutId = null;
+    let lastRenderedFenForArrows = "";
+    let lastObservedBoardFenPart = "";
+    let latestLiveFen = "";
+    let latestLiveFenSource = "none";
+    let latestLiveFenTimestamp = 0;
+    let pendingAnalyzeTimeout = null;
+    let scheduledFenForAnalyze = "";
+    let debugRunId = 0;
+    const DEBUG_ENABLED = false;
+    const START_POSITION_BOARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+
+    function debugLog(hypothesisId, location, message, data = {}) {
+        if (!DEBUG_ENABLED) return;
+        const payload = {sessionId:'ab8fe4',runId:`run-${debugRunId}`,hypothesisId,location,message,data,timestamp:Date.now()};
+        fetch('http://127.0.0.1:7388/ingest/7a563922-5671-4b7f-a221-2463f53728ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ab8fe4'},body:JSON.stringify(payload)}).catch(()=>{});
+        try {
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: 'http://127.0.0.1:7388/ingest/7a563922-5671-4b7f-a221-2463f53728ba',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Debug-Session-Id': 'ab8fe4'
+                },
+                data: JSON.stringify(payload)
+            });
+        } catch (e) {}
+    }
+
+    // --- STYLES ---
+    GM_addStyle(`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
+        #uwu-gui {
+            --uwu-bg-1: rgba(7, 20, 32, 0.92);
+            --uwu-bg-2: rgba(12, 33, 44, 0.9);
+            --uwu-border: rgba(136, 224, 255, 0.26);
+            --uwu-accent: #56e0c8;
+            --uwu-accent-2: #ffd166;
+            --uwu-hot: #ff7f50;
+            position: fixed;
+            top: 100px;
+            right: 20px;
+            width: 340px;
+            background:
+                radial-gradient(120% 130% at 10% -10%, rgba(255, 174, 122, 0.2), transparent 48%),
+                radial-gradient(120% 140% at 95% 100%, rgba(68, 205, 255, 0.22), transparent 50%),
+                linear-gradient(160deg, var(--uwu-bg-1), var(--uwu-bg-2));
+            backdrop-filter: blur(18px) saturate(135%) !important;
+            border-radius: 18px !important;
+            border: 1px solid var(--uwu-border) !important;
+            box-shadow: 0 16px 54px rgba(0, 0, 0, 0.58), inset 0 0 0 1px rgba(255,255,255,0.04) !important;
+            color: white !important;
+            font-family: 'Space Grotesk', sans-serif !important;
+            z-index: 2147483647 !important;
+            user-select: none !important;
+            display: none;
+            overflow: hidden;
+            isolation: isolate;
+            animation: uwu-gui-enter 0.42s cubic-bezier(.2,.8,.2,1);
+        }
+        #uwu-gui::before {
+            content: '';
+            position: absolute;
+            inset: -130px;
+            background: conic-gradient(from 80deg, transparent 0deg, rgba(86, 224, 200, 0.28) 90deg, transparent 170deg, rgba(255, 209, 102, 0.22) 250deg, transparent 360deg);
+            filter: blur(22px);
+            animation: uwu-border-spin 11s linear infinite;
+            pointer-events: none;
+            z-index: -2;
+        }
+        #uwu-gui::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(130deg, rgba(255,255,255,0.06), rgba(255,255,255,0));
+            pointer-events: none;
+            z-index: -1;
+        }
+        #uwu-gui.collapsed {
+            width: 220px !important;
+        }
+
+        #uwu-gui-header {
+            position: relative;
+            padding: 14px 16px;
+            background: linear-gradient(128deg, rgba(0, 193, 167, 0.35), rgba(255, 125, 65, 0.3));
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            cursor: move;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        #uwu-gui-header .title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 800;
+            font-size: 13px;
+            letter-spacing: 0.7px;
+        }
+        #uwu-gui-header .title span {
+            text-transform: uppercase;
+            font-family: 'Sora', sans-serif;
+            text-shadow: 0 2px 9px rgba(0,0,0,0.35);
+        }
+        #uwu-gui-header .title img {
+            width: 30px;
+            height: 30px;
+            border-radius: 9px;
+            object-fit: cover;
+            border: 1px solid rgba(255,255,255,0.35);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+            animation: uwu-avatar-bob 3.8s ease-in-out infinite;
+        }
+        #uwu-toggle-btn {
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.17);
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: 700;
+            transition: transform 0.25s ease, background 0.25s ease;
+        }
+        #uwu-toggle-btn:hover {
+            transform: rotate(7deg) scale(1.06);
+            background: rgba(255,255,255,0.22);
+        }
+
+        #uwu-tabs {
+            display: flex;
+            gap: 6px;
+            padding: 7px 8px 8px;
+            background: linear-gradient(180deg, rgba(0,0,0,0.24), rgba(0,0,0,0.12));
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .uwu-tab {
+            flex: 1;
+            position: relative;
+            padding: 10px 7px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.18px;
+            color: rgba(255,255,255,0.64);
+            cursor: pointer;
+            border-radius: 10px;
+            transition: all 0.24s ease;
+            overflow: hidden;
+        }
+        .uwu-tab::after {
+            content: '';
+            position: absolute;
+            left: 18%;
+            right: 18%;
+            bottom: 2px;
+            height: 2px;
+            border-radius: 3px;
+            background: linear-gradient(90deg, var(--uwu-accent), var(--uwu-accent-2));
+            transform: scaleX(0);
+            transform-origin: center;
+            transition: transform 0.28s ease;
+        }
+        .uwu-tab:hover {
+            color: rgba(255,255,255,0.88);
+            background: rgba(255,255,255,0.1);
+            transform: translateY(-1px);
+        }
+        .uwu-tab.active {
+            color: #ffffff;
+            background: linear-gradient(125deg, rgba(43, 187, 169, 0.3), rgba(245, 160, 92, 0.28));
+            box-shadow: 0 9px 24px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.12);
+        }
+        .uwu-tab.active::after {
+            transform: scaleX(1);
+        }
+
+        #uwu-gui-body {
+            padding: 14px;
+        }
+        .uwu-tab-content {
+            display: none;
+            opacity: 0;
+            transform: translateY(7px);
+        }
+        .uwu-tab-content.active {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+            animation: uwu-tab-reveal 0.33s ease;
+        }
+
+        .uwu-card {
+            position: relative;
+            background: linear-gradient(154deg, rgba(255,255,255,0.11), rgba(255,255,255,0.04));
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 14px;
+            padding: 14px 15px;
+            margin-bottom: 10px;
+            overflow: hidden;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
+            animation: uwu-card-pop .34s ease both;
+        }
+        .uwu-card::before {
+            content: '';
+            position: absolute;
+            top: -160%;
+            left: -35%;
+            width: 54%;
+            height: 370%;
+            background: linear-gradient(120deg, transparent, rgba(255,255,255,0.22), transparent);
+            transform: rotate(13deg);
+            transition: left 0.56s ease;
+            pointer-events: none;
+        }
+        .uwu-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255,255,255,0.22);
+        }
+        .uwu-card:hover::before {
+            left: 110%;
+        }
+        #tab-main .uwu-card:nth-child(1) { animation-delay: 0.03s; }
+        #tab-main .uwu-card:nth-child(2) { animation-delay: 0.08s; }
+        #tab-main .uwu-card:nth-child(3) { animation-delay: 0.13s; }
+        #tab-main .uwu-card:nth-child(4) { animation-delay: 0.18s; }
+        #tab-settings .uwu-setting { animation: uwu-card-pop 0.34s ease both; }
+        #tab-settings .uwu-setting:nth-child(1) { animation-delay: 0.04s; }
+        #tab-settings .uwu-setting:nth-child(2) { animation-delay: 0.08s; }
+        #tab-settings .uwu-setting:nth-child(3) { animation-delay: 0.12s; }
+
+        .uwu-card-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: rgba(255,255,255,0.58);
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+            margin-bottom: 6px;
+        }
+        .uwu-card-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 16px;
+            font-weight: 700;
+            text-shadow: 0 1px 10px rgba(0,0,0,0.2);
+        }
+        .uwu-card-value.green { color: #50f8bb; }
+        .uwu-card-value.yellow { color: #ffd97d; }
+        .uwu-card-value.red { color: #ff8080; }
+        #best-move-text {
+            font-size: 20px !important;
+            letter-spacing: 0.35px;
+        }
+        #best-move-meta {
+            margin-top: 6px;
+            min-height: 18px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.88);
+            font-weight: 700;
+            letter-spacing: 0.22px;
+        }
+        #best-move-meta.promotion-meta {
+            color: #ffdb77;
+            text-shadow: 0 0 10px rgba(255, 210, 90, 0.38);
+        }
+
+        .uwu-btn {
+            width: 100%;
+            padding: 12px;
+            margin-top: 8px;
+            border: 1px solid transparent;
+            border-radius: 11px;
+            font-family: 'Sora', sans-serif;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            transition: transform 0.22s ease, box-shadow 0.22s ease, filter 0.22s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .uwu-btn::before {
+            content: '';
+            position: absolute;
+            top: -40%;
+            left: -120%;
+            width: 55%;
+            height: 180%;
+            background: linear-gradient(120deg, transparent, rgba(255,255,255,0.45), transparent);
+            transform: rotate(15deg);
+            transition: left 0.45s ease;
+        }
+        .uwu-btn:hover {
+            transform: translateY(-2px);
+            filter: brightness(1.05);
+        }
+        .uwu-btn:hover::before {
+            left: 120%;
+        }
+        .uwu-btn:active {
+            transform: translateY(0);
+        }
+        .uwu-btn-primary {
+            background: linear-gradient(130deg, #1ec6a5, #3db7ff);
+            color: white;
+            box-shadow: 0 11px 24px rgba(24, 170, 167, 0.28);
+        }
+        .uwu-btn-danger {
+            background: linear-gradient(130deg, #f0735b, #e74b6f);
+            color: white;
+            box-shadow: 0 11px 24px rgba(232, 88, 95, 0.24);
+        }
+        .uwu-btn-success {
+            background: linear-gradient(130deg, #22c55e, #14b8a6);
+            color: white;
+        }
+        .uwu-btn.scanning {
+            animation: uwu-scan-beat 0.92s ease infinite;
+            box-shadow: 0 0 0 0 rgba(79, 231, 205, 0.44);
+        }
+
+        .uwu-setting {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .uwu-setting:last-child {
+            border-bottom: none;
+        }
+        .uwu-setting-label {
+            font-size: 13px;
+            color: rgba(255,255,255,0.93);
+        }
+        .uwu-toggle {
+            width: 46px;
+            height: 24px;
+            background: rgba(255,255,255,0.18);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.24s ease;
+        }
+        .uwu-toggle.on {
+            background: linear-gradient(130deg, #00c9a7, #ffd166);
+            border-color: rgba(255,255,255,0.38);
+        }
+        .uwu-toggle::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: #fff;
+            border-radius: 50%;
+            top: 2px;
+            left: 3px;
+            box-shadow: 0 5px 14px rgba(0,0,0,0.34);
+            transition: all 0.24s ease;
+        }
+        .uwu-toggle.on::after {
+            left: 23px;
+        }
+
+        #tab-info .uwu-card:last-child .uwu-card-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+        .uwu-info-image-wrap {
+            position: relative;
+            border-radius: 13px;
+            overflow: hidden;
+            margin-top: 3px;
+            border: 1px solid rgba(255,255,255,0.22);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.34);
+        }
+        .uwu-info-image-wrap::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -80%;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(110deg, transparent, rgba(255,255,255,0.45), transparent);
+            animation: uwu-image-shine 4.2s ease-in-out infinite;
+        }
+        .uwu-info-image {
+            width: 100%;
+            height: 140px;
+            object-fit: cover;
+            display: block;
+            transform: scale(1.04);
+            transition: transform 0.45s ease;
+        }
+        .uwu-info-caption {
+            margin-top: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: rgba(255,255,255,0.75);
+        }
+        #tab-info .uwu-card:hover .uwu-info-image {
+            transform: scale(1.09);
+        }
+
+        #uwu-arrow-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1000 !important;
+        }
+        .best-move-arrow {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: draw-arrow 0.34s ease-out forwards;
+        }
+        .best-move-arrow.promo-neon {
+            stroke: rgba(116, 255, 202, 0.95) !important;
+            filter: drop-shadow(0 0 7px rgba(116, 255, 202, 0.95)) drop-shadow(0 0 15px rgba(73, 174, 255, 0.7));
+            animation: draw-arrow 0.34s ease-out forwards, promo-arrow-pulse 0.6s ease-out;
+        }
+        #best-move-text.promotion-highlight {
+            color: #ffe79a !important;
+            font-weight: 800;
+            text-shadow: 0 0 10px rgba(255, 224, 122, 0.88), 0 0 16px rgba(89, 209, 255, 0.44);
+            animation: promo-text-pop 0.45s ease-out;
+        }
+        .uwu-promotion-burst {
+            position: absolute;
+            width: 12.5%;
+            height: 12.5%;
+            pointer-events: none;
+            border-radius: 14px;
+            transform-origin: center;
+            z-index: 1200;
+            background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(102,255,210,0.7) 40%, rgba(73,174,255,0.15) 85%, transparent 100%);
+            box-shadow: 0 0 30px rgba(102,255,210,0.9), 0 0 42px rgba(73,174,255,0.45);
+            animation: promo-square-pop 0.55s ease-out forwards, promo-square-pulse 0.6s ease-out;
+        }
+        .uwu-promotion-ring {
+            position: absolute;
+            width: 12.5%;
+            height: 12.5%;
+            pointer-events: none;
+            border-radius: 14px;
+            border: 2px solid rgba(163, 255, 215, 0.92);
+            z-index: 1199;
+            box-shadow: 0 0 18px rgba(163,255,215,0.75);
+            animation: promo-ring-wave 0.6s ease-out forwards;
+        }
+        .uwu-promotion-particle {
+            position: absolute;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            pointer-events: none;
+            background: rgba(255,255,255,0.92);
+            box-shadow: 0 0 10px rgba(255,255,255,0.95), 0 0 16px rgba(102,255,210,0.75);
+            z-index: 1201;
+            animation: promo-particle-burst 0.55s ease-out forwards;
+        }
+
+        .uwu-discord {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 12px;
+            background: linear-gradient(130deg, #2f8cff, #22d3ee);
+            border-radius: 10px;
+            color: white;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 12px;
+        }
+        .uwu-discord img {
+            width: 18px;
+            height: 18px;
+        }
+
+        #uwu-warning-overlay,
+        #uwu-access-overlay,
+        #uwu-hardlock-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483647;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(2, 9, 13, 0.86);
+            backdrop-filter: blur(6px);
+        }
+        #uwu-hardlock-overlay {
+            background: rgba(0, 0, 0, 0.9);
+        }
+        #uwu-warning-box,
+        #uwu-access-box,
+        #uwu-hardlock-box {
+            width: min(620px, 95vw);
+            background: linear-gradient(145deg, rgba(12,24,35,0.96), rgba(24,34,46,0.96));
+            border: 1px solid rgba(131, 231, 255, 0.25);
+            border-radius: 15px;
+            box-shadow: 0 18px 70px rgba(0, 0, 0, 0.62);
+            color: #fff;
+            padding: 20px;
+            font-family: 'Space Grotesk', sans-serif;
+            animation: uwu-modal-pop 0.26s ease-out;
+        }
+        #uwu-hardlock-box {
+            width: min(560px, 95vw);
+            border-color: rgba(248,113,113,0.5);
+            text-align: center;
+        }
+        #uwu-warning-title {
+            font-size: 18px;
+            font-weight: 800;
+            margin-bottom: 10px;
+            color: #ffd166;
+        }
+        #uwu-access-box h3 {
+            margin: 0 0 10px 0;
+            color: #56e0c8;
+            font-size: 18px;
+            font-family: 'Sora', sans-serif;
+        }
+        #uwu-hardlock-box h3 {
+            margin: 0 0 8px 0;
+            color: #f87171;
+        }
+        #uwu-warning-text,
+        #uwu-access-help,
+        #uwu-hardlock-box p {
+            font-size: 13px;
+            line-height: 1.6;
+            color: rgba(255,255,255,0.92);
+            margin-bottom: 14px;
+            white-space: pre-line;
+        }
+
+        .uwu-access-actions {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .uwu-access-actions button {
+            flex: 1;
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 11px;
+            padding: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            color: white;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: transform 0.22s ease, filter 0.22s ease;
+        }
+        .uwu-access-actions button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+        }
+        .uwu-access-actions button img {
+            width: 19px;
+            height: 19px;
+            margin-right: 2px;
+            transition: transform 0.24s ease;
+        }
+        .uwu-access-actions button:hover img {
+            transform: rotate(-8deg) scale(1.08);
+        }
+        #uwu-open-discord {
+            background: linear-gradient(130deg, #4c6fff, #2ba7ff);
+        }
+        #uwu-open-youtube {
+            background: linear-gradient(130deg, #ef4444, #f97316);
+        }
+        #uwu-key-input {
+            width: 100%;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            outline: none;
+            margin-bottom: 8px;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        #uwu-key-input:focus {
+            border-color: rgba(86, 224, 200, 0.82);
+            box-shadow: 0 0 0 3px rgba(86, 224, 200, 0.22);
+        }
+        #uwu-warning-btn,
+        #uwu-unlock-btn,
+        #uwu-hardlock-reset {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 11px 14px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            color: white;
+            transition: transform 0.2s ease, filter 0.2s ease;
+        }
+        #uwu-warning-btn:hover,
+        #uwu-unlock-btn:hover,
+        #uwu-hardlock-reset:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+        }
+        #uwu-warning-btn {
+            background: linear-gradient(130deg, #22c55e, #14b8a6);
+        }
+        #uwu-unlock-btn {
+            background: linear-gradient(130deg, #1ec6a5, #2fb1ff);
+        }
+        #uwu-hardlock-reset {
+            background: linear-gradient(130deg, #ef4444, #dc2626);
+        }
+        #uwu-access-status {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #fca5a5;
+            min-height: 16px;
+        }
+
+        @media (max-width: 768px) {
+            #uwu-gui {
+                width: min(94vw, 360px);
+                right: 3vw;
+                top: 74px;
+            }
+            #uwu-gui-body {
+                padding: 12px;
+            }
+            .uwu-card {
+                padding: 13px;
+            }
+            .uwu-tab {
+                font-size: 10.5px;
+                padding: 9px 6px;
+            }
+        }
+
+        @keyframes uwu-gui-enter {
+            0% { opacity: 0; transform: translateY(12px) scale(0.96); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes uwu-border-spin {
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes uwu-avatar-bob {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-2px) rotate(2deg); }
+        }
+        @keyframes uwu-tab-reveal {
+            0% { opacity: 0; transform: translateY(9px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes uwu-card-pop {
+            0% { opacity: 0; transform: translateY(8px) scale(0.985); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes uwu-scan-beat {
+            0% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(79, 231, 205, 0.44); }
+            60% { transform: translateY(-2px) scale(1.01); box-shadow: 0 0 0 13px rgba(79, 231, 205, 0); }
+            100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(79, 231, 205, 0); }
+        }
+        @keyframes draw-arrow {
+            to { stroke-dashoffset: 0; }
+        }
+        @keyframes promo-arrow-pulse {
+            0% { opacity: 0.8; stroke-width: 16; }
+            50% { opacity: 1; stroke-width: 19; }
+            100% { opacity: 0.95; stroke-width: 16; }
+        }
+        @keyframes promo-text-pop {
+            0% { transform: scale(1); }
+            45% { transform: scale(1.13); }
+            100% { transform: scale(1); }
+        }
+        @keyframes promo-square-pop {
+            0% { opacity: 0.25; transform: scale(0.95); }
+            45% { opacity: 1; transform: scale(1.2); }
+            100% { opacity: 0; transform: scale(1.02); }
+        }
+        @keyframes promo-square-pulse {
+            0% { filter: brightness(1); }
+            50% { filter: brightness(1.45); }
+            100% { filter: brightness(1); }
+        }
+        @keyframes promo-ring-wave {
+            0% { opacity: 0.95; transform: scale(0.95); }
+            100% { opacity: 0; transform: scale(1.8); }
+        }
+        @keyframes promo-particle-burst {
+            0% { opacity: 0.95; transform: translate(0, 0) scale(1); }
+            100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.35); }
+        }
+        @keyframes uwu-image-shine {
+            0%, 36% { left: -80%; }
+            52%, 100% { left: 150%; }
+        }
+        @keyframes uwu-modal-pop {
+            0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+    `);
+
+    // --- GUI ---
+    function createGUI() {
+        if (document.getElementById('uwu-gui')) return;
+        const gui = document.createElement('div');
+        gui.id = 'uwu-gui';
+        gui.innerHTML = `
+            <div id="uwu-gui-header">
+                <div class="title">
+                    <img src="${GUI_IMAGE}">
+                    <span>CHESS CHEATS</span>
+                </div>
+                <div id="uwu-toggle-btn">−</div>
+            </div>
+            <div id="uwu-tabs">
+                <div class="uwu-tab active" data-tab="main">🎯 Chính</div>
+                <div class="uwu-tab" data-tab="settings">⚙️ Cài đặt</div>
+                <div class="uwu-tab" data-tab="info">ℹ️ Info</div>
+            </div>
+            <div id="uwu-gui-body">
+                <!-- Tab Chính -->
+                <div class="uwu-tab-content active" id="tab-main">
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Trạng thái</div>
+                        <div class="uwu-card-value green" id="analysis-status">✅ Sẵn sàng</div>
+                    </div>
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Quân của bạn</div>
+                        <div class="uwu-card-value" id="player-color-display">Đang phát hiện...</div>
+                    </div>
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Nước đi tốt nhất</div>
+                        <div class="uwu-card-value green" id="best-move-text" style="font-size:20px;">-</div>
+                        <div id="best-move-meta"></div>
+                    </div>
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Lượt đi</div>
+                        <div class="uwu-card-value yellow" id="turn-display">-</div>
+                    </div>
+                    <button id="force-analyze" class="uwu-btn uwu-btn-primary">🔎 Scan</button>
+                </div>
+                
+                <!-- Tab Cài đặt -->
+                <div class="uwu-tab-content" id="tab-settings">
+                    <div class="uwu-setting">
+                        <span class="uwu-setting-label">Bật script</span>
+                        <div class="uwu-toggle on" id="toggle-script"></div>
+                    </div>
+                    <div class="uwu-setting">
+                        <span class="uwu-setting-label">Hiện mũi tên</span>
+                        <div class="uwu-toggle on" id="toggle-arrows"></div>
+                    </div>
+                    <div class="uwu-setting">
+                        <span class="uwu-setting-label">Tự động phân tích</span>
+                        <div class="uwu-toggle on" id="toggle-auto"></div>
+                    </div>
+                    <button id="reset-all" class="uwu-btn uwu-btn-danger">🗑️ Đặt lại tất cả</button>
+                </div>
+                
+                <!-- Tab Info -->
+                <div class="uwu-tab-content" id="tab-info">
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Phiên bản</div>
+                        <div class="uwu-card-value">1.0</div>
+                    </div>
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Engine</div>
+                        <div class="uwu-card-value">Stockfish 11</div>
+                    </div>
+                    <div class="uwu-card">
+                        <div class="uwu-card-label">Tác giả</div>
+                        <div class="uwu-card-value">UwU (Chess + Roblox Scripts)</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(gui);
+        
+        // Toggle collapse
+        document.getElementById('uwu-toggle-btn').onclick = () => {
+            guiCollapsed = !guiCollapsed;
+            gui.classList.toggle('collapsed', guiCollapsed);
+            document.getElementById('uwu-gui-body').style.display = guiCollapsed ? 'none' : 'block';
+            document.getElementById('uwu-tabs').style.display = guiCollapsed ? 'none' : 'flex';
+            document.getElementById('uwu-toggle-btn').innerText = guiCollapsed ? '+' : '−';
+        };
+        
+        // Tabs
+        document.querySelectorAll('.uwu-tab').forEach(tab => {
+            tab.onclick = () => {
+                document.querySelectorAll('.uwu-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.uwu-tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+                activeTab = tab.dataset.tab;
+            };
+        });
+        
+        // Toggle script
+        document.getElementById('toggle-script').onclick = function() {
+            isScriptEnabled = !isScriptEnabled;
+            this.classList.toggle('on', isScriptEnabled);
+            if (!isScriptEnabled) {
+                clearArrows();
+                updateStatus("⛔ Đã tắt");
+            } else {
+                resetAnalysis();
+            }
+        };
+        
+        // Toggle arrows
+        let showArrows = true;
+        document.getElementById('toggle-arrows').onclick = function() {
+            showArrows = !showArrows;
+            this.classList.toggle('on', showArrows);
+            if (!showArrows) clearArrows();
+        };
+        
+        // Toggle auto
+        let autoAnalyze = true;
+        document.getElementById('toggle-auto').onclick = function() {
+            autoAnalyze = !autoAnalyze;
+            this.classList.toggle('on', autoAnalyze);
+        };
+        
+        // Force analyze
+        document.getElementById('force-analyze').onclick = () => {
+            resetAnalysis();
+        };
+        
+        // Reset all
+        document.getElementById('reset-all').onclick = () => {
+            resetRuntimeState("reset-all-button");
+            updateStatus("✅ Sẵn sàng");
+            document.getElementById('best-move-text').innerText = "-";
+            document.getElementById('best-move-text').classList.remove('promotion-highlight');
+            document.getElementById('best-move-meta').innerText = "";
+            document.getElementById('best-move-meta').classList.remove('promotion-meta');
+            document.getElementById('player-color-display').innerText = "Đang phát hiện...";
+            document.getElementById('turn-display').innerText = "-";
+        };
+        
+        dragElement(gui);
+    }
+
+    function showWarningOverlay() {
+        if (warningAcknowledged) return;
+        if (document.getElementById('uwu-warning-overlay')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'uwu-warning-overlay';
+        overlay.innerHTML = `
+            <div id="uwu-warning-box">
+                <div id="uwu-warning-title">⚠️ Lưu ý quan trọng</div>
+                <div id="uwu-warning-text">- Chơi bằng script với người thật quá nhiều có thể bị khóa tài khoản.
+- Khi mới vào trận bạn phải bấm "Scan" trước, nếu không sẽ không chỉ.
+- Nếu gặp lỗi nhiều hoặc chỉ sai, hãy bấm "Scan" để quét lại.
+- Bạn phải xác nhận đã hiểu để tiếp tục sử dụng.</div>
+                <button id="uwu-warning-btn">Đã hiểu</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const btn = document.getElementById('uwu-warning-btn');
+        if (btn) {
+            btn.onclick = () => {
+                warningAcknowledged = true;
+                overlay.remove();
+                showAccessOverlay();
+            };
+        }
+    }
+
+    function showAccessOverlay() {
+        if (accessUnlocked) return;
+        if (document.getElementById('uwu-access-overlay')) return;
+        const warning = document.getElementById('uwu-warning-overlay');
+        if (warning) warning.remove();
+        const hardlock = document.getElementById('uwu-hardlock-overlay');
+        if (hardlock) hardlock.remove();
+        youtubeVerified = false;
+        youtubeVisitStartedAt = 0;
+        authState = AUTH_STATE.IDLE;
+        const overlay = document.createElement('div');
+        overlay.id = 'uwu-access-overlay';
+        overlay.innerHTML = `
+            <div id="uwu-access-box">
+                <h3>🔐 Kích hoạt script</h3>
+                <div id="uwu-access-help">- Vào Discord để lấy key.
+- Key sẽ đổi 1 lần mỗi tuần.</div>
+                <div class="uwu-access-actions">
+                    <button id="uwu-open-discord"><img src="https://cdn-icons-png.flaticon.com/512/3670/3670157.png" alt="Discord icon">Vào Discord lấy key</button>
+                    <button id="uwu-open-youtube"><img src="https://cdn-icons-png.flaticon.com/512/1384/1384060.png" alt="YouTube icon">Đăng ký YouTube</button>
+                </div>
+                <input id="uwu-key-input" type="text" placeholder="Nhập key tại đây" autocomplete="off">
+                <button id="uwu-unlock-btn">Mở khóa</button>
+                <div id="uwu-access-status"></div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const openDiscordBtn = document.getElementById('uwu-open-discord');
+        const openYoutubeBtn = document.getElementById('uwu-open-youtube');
+        const unlockBtn = document.getElementById('uwu-unlock-btn');
+        const keyInput = document.getElementById('uwu-key-input');
+        const statusEl = document.getElementById('uwu-access-status');
+
+        const setAuthStatus = (state, message = "") => {
+            authState = state;
+            if (!statusEl) return;
+            if (state === AUTH_STATE.SCANNING) statusEl.style.color = "#fbbf24";
+            else if (state === AUTH_STATE.VERIFIED) statusEl.style.color = "#86efac";
+            else if (state === AUTH_STATE.FAILED || state === AUTH_STATE.ERROR) statusEl.style.color = "#f87171";
+            else statusEl.style.color = "rgba(255,255,255,0.85)";
+            statusEl.innerText = message;
+            console.log("Status:", authState);
+        };
+
+        const scanService = async () => {
+            youtubeVisitStartedAt = Date.now();
+            youtubeVerified = false;
+            setAuthStatus(AUTH_STATE.SCANNING, "Scanning...");
+            window.open(YOUTUBE_LINK, '_blank');
+            return { startedAt: youtubeVisitStartedAt };
+        };
+
+        const verifyService = async (scanResult, timeoutMs = 30000) => {
+            if (!scanResult || !scanResult.startedAt) throw new Error("Scan failed");
+            return new Promise((resolve, reject) => {
+                let settled = false;
+                const cleanup = () => {
+                    window.removeEventListener('focus', onFocusBack);
+                    clearTimeout(timer);
+                };
+                const onFocusBack = () => {
+                    if (settled || accessUnlocked) return;
+                    settled = true;
+                    const elapsed = Date.now() - scanResult.startedAt;
+                    cleanup();
+                    if (elapsed >= 5000) resolve({ success: true, elapsed: elapsed });
+                    else resolve({ success: false, elapsed: elapsed, reason: "too-fast" });
+                };
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+                    reject(new Error("Scan timeout"));
+                }, timeoutMs);
+                window.addEventListener('focus', onFocusBack);
+            });
+        };
+
+        const authController = async () => {
+            try {
+                const scanResult = await scanService();
+                console.log("Scan result:", scanResult);
+                const verify = await verifyService(scanResult);
+                console.log("Verify result:", verify);
+                if (verify.success) {
+                    youtubeVerified = true;
+                    setAuthStatus(AUTH_STATE.VERIFIED, "Xác nhận YouTube thành công.");
+                } else {
+                    youtubeVerified = false;
+                    setAuthStatus(AUTH_STATE.FAILED, "Xác nhận thất bại. Hãy thử lại.");
+                    showHardlockOverlay();
+                }
+            } catch (err) {
+                youtubeVerified = false;
+                console.error(err);
+                setAuthStatus(AUTH_STATE.ERROR, "Lỗi xác minh. Vui lòng thử lại.");
+            }
+        };
+
+        if (openDiscordBtn) openDiscordBtn.onclick = () => window.open(DISCORD_LINK, '_blank');
+        if (openYoutubeBtn) openYoutubeBtn.onclick = () => { authController(); };
+        if (unlockBtn) {
+            unlockBtn.onclick = () => {
+                const key = (keyInput?.value || '').trim();
+                if (!statusEl) return;
+                if (!youtubeVerified || authState !== AUTH_STATE.VERIFIED) {
+                    statusEl.style.color = "#f87171";
+                    statusEl.innerText = "Bạn cần hoàn tất xác minh YouTube trước khi mở khóa.";
+                    return;
+                }
+                if (key !== ACCESS_KEY) {
+                    statusEl.style.color = "#f87171";
+                    statusEl.innerText = "Sai key. Vào Discord để lấy key mới nhất.";
+                    return;
+                }
+                accessUnlocked = true;
+                overlay.remove();
+                updateStatus("✅ Sẵn sàng");
+            };
+        }
+    }
+
+    function showHardlockOverlay() {
+        const oldAccess = document.getElementById('uwu-access-overlay');
+        if (oldAccess) oldAccess.remove();
+        if (document.getElementById('uwu-hardlock-overlay')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'uwu-hardlock-overlay';
+        overlay.innerHTML = `
+            <div id="uwu-hardlock-box">
+                <h3>⛔ Xác nhận thất bại</h3>
+                <p>Thời gian xác minh chưa đủ.<br>Hệ thống đã khóa và bạn phải làm lại từ đầu.</p>
+                <button id="uwu-hardlock-reset" disabled>Làm lại từ đầu (5)</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const resetBtn = document.getElementById('uwu-hardlock-reset');
+        let remain = 5;
+        const countdown = setInterval(() => {
+            if (!document.getElementById('uwu-hardlock-overlay')) {
+                clearInterval(countdown);
+                return;
+            }
+            remain -= 1;
+            if (remain > 0) {
+                resetBtn.innerText = `Làm lại từ đầu (${remain})`;
+            } else {
+                clearInterval(countdown);
+                resetBtn.disabled = false;
+                resetBtn.innerText = "Làm lại từ đầu";
+            }
+        }, 1000);
+        const resetToStart = () => {
+            accessUnlocked = false;
+            warningAcknowledged = false;
+            youtubeVisitStartedAt = 0;
+            youtubeVerified = false;
+            authState = AUTH_STATE.IDLE;
+            const access = document.getElementById('uwu-access-overlay');
+            if (access) access.remove();
+            const warning = document.getElementById('uwu-warning-overlay');
+            if (warning) warning.remove();
+            const keyInput = document.getElementById('uwu-key-input');
+            if (keyInput) keyInput.value = "";
+            const hardlock = document.getElementById('uwu-hardlock-overlay');
+            if (hardlock) hardlock.remove();
+            showWarningOverlay();
+        };
+        document.getElementById('uwu-hardlock-reset').onclick = resetToStart;
+    }
+
+    function ensureEntryFlowVisible() {
+        const hasWarning = !!document.getElementById('uwu-warning-overlay');
+        const hasAccess = !!document.getElementById('uwu-access-overlay');
+        const hasHardlock = !!document.getElementById('uwu-hardlock-overlay');
+        if (!warningAcknowledged && !hasWarning && !hasAccess && !hasHardlock) {
+            showWarningOverlay();
+            return;
+        }
+        if (warningAcknowledged && !accessUnlocked && !hasAccess && !hasHardlock) {
+            showAccessOverlay();
+        }
+    }
+
+    function dragElement(elmnt) {
+        let p1=0, p2=0, p3=0, p4=0;
+        elmnt.onmousedown = (e) => {
+            if (e.target.id === 'uwu-toggle-btn' || e.target.closest('.uwu-tab') || e.target.closest('button') || e.target.closest('a')) return;
+            p3 = e.clientX; p4 = e.clientY;
+            document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
+            document.onmousemove = (e) => {
+                p1 = p3 - e.clientX; p2 = p4 - e.clientY;
+                p3 = e.clientX; p4 = e.clientY;
+                elmnt.style.top = (elmnt.offsetTop - p2) + "px";
+                elmnt.style.left = (elmnt.offsetLeft - p1) + "px";
+            };
+        };
+    }
+
+    // --- ENGINE ---
+    function initEngine(useFallback = false) {
+        const url = useFallback ? FALLBACK_URL : STOCKFISH_URL;
+        updateStatus("⏳ Đang tải...");
+        // #region agent log
+        debugLog('H6', 'ChessCheats.user.js:initEngine', 'init engine called', { useFallback: useFallback, url: url });
+        // #endregion
+        GM_xmlhttpRequest({
+            method: "GET", url: url,
+            onload: (res) => {
+                // #region agent log
+                debugLog('H6', 'ChessCheats.user.js:initEngine.onload', 'engine script fetched', { status: res.status, useFallback: useFallback });
+                // #endregion
+                if (res.status !== 200) { if(!useFallback) initEngine(true); return; }
+                let code = res.responseText;
+                code = code.replace(/import\.meta\.url/g, `"${url}"`);
+                code = code.replace(/var\s+scriptDirectory\s*=\s*['"](.*?)['"]/g, `var scriptDirectory = "${url.substring(0, url.lastIndexOf('/') + 1)}"`);
+                
+                try {
+                    const blob = new Blob([code], {type:'application/javascript'});
+                    const blobURL = URL.createObjectURL(blob);
+                    engine = new Worker(blobURL);
+                    
+                    engine.onmessage = (e) => {
+                        const line = e.data;
+                        // #region agent log
+                        if (typeof line === 'string' && (line.startsWith('bestmove') || line.includes('info depth 1') || line.includes('uciok') || line.includes('readyok'))) {
+                            debugLog('H7', 'ChessCheats.user.js:engine.onmessage', 'engine message', { line: line });
+                        }
+                        // #endregion
+                        if (typeof line === 'string') {
+                            if (line.startsWith('bestmove')) handleBestMove(line.split(' ')[1]);
+                            else if (line.includes('info depth')) {
+                                const d = line.match(/depth (\d+)/);
+                                if (d) updateStatus(`🧠 Đang tính... (${d[1]})`);
+                                const pvMatch = line.match(/\spv\s+([a-h][1-8][a-h][1-8][qrbn]?(?:\s+[a-h][1-8][a-h][1-8][qrbn]?){0,5})/i);
+                                if (pvMatch && pvMatch[1]) {
+                                    lastPvMoves = pvMatch[1].trim().split(/\s+/).filter(Boolean);
+                                }
+                            }
+                        }
+                    };
+                    
+                    engine.postMessage('uci');
+                    engine.postMessage('isready');
+                    // #region agent log
+                    debugLog('H6', 'ChessCheats.user.js:initEngine', 'engine worker created and initialized', {});
+                    // #endregion
+                    updateStatus("✅ Sẵn sàng");
+                } catch (e) {
+                    console.error("Chess Cheats: Worker creation failed", e);
+                    // #region agent log
+                    debugLog('H6', 'ChessCheats.user.js:initEngine', 'engine worker creation failed', { error: String(e) });
+                    // #endregion
+                    if (!useFallback) initEngine(true);
+                    else updateStatus("❌ Lỗi Engine!");
+                }
+            },
+            onerror: () => {
+                // #region agent log
+                debugLog('H6', 'ChessCheats.user.js:initEngine.onerror', 'engine script fetch failed', { useFallback: useFallback });
+                // #endregion
+                initEngine(true);
+            }
+        });
+    }
+
+    function updateStatus(t) {
+        const el = document.getElementById('analysis-status');
+        if(el) el.innerText = t;
+    }
+
+    function getFenBoardPart(fen) {
+        if (!fen || typeof fen !== 'string') return "";
+        return (fen.trim().split(/\s+/)[0] || "");
+    }
+
+    function normalizeFen(fen) {
+        if (!fen || typeof fen !== 'string') return null;
+        const parts = fen.trim().split(/\s+/).filter(Boolean);
+        if (!parts.length) return null;
+        if (parts.length < 2) return null;
+        const side = (parts[1] || "").toLowerCase();
+        if (side !== 'w' && side !== 'b') return null;
+        const fullFen = parts.slice(0, 6);
+        fullFen[1] = side;
+        while (fullFen.length < 6) {
+            if (fullFen.length === 2) fullFen.push('-');
+            else if (fullFen.length === 3) fullFen.push('-');
+            else if (fullFen.length === 4) fullFen.push('0');
+            else fullFen.push('1');
+        }
+        return fullFen.join(' ');
+    }
+
+    function getCurrentTurnFromFen(fen) {
+        if (!fen || typeof fen !== 'string') return null;
+        const parts = fen.trim().split(/\s+/);
+        if (parts.length < 2) return null;
+        const side = (parts[1] || "").toLowerCase();
+        if (side === 'w' || side === 'b') return side;
+        return null;
+    }
+
+    function resetRuntimeState(reason = "manual") {
+        lastFen = "";
+        lastAnalyzedFen = "";
+        lastBestMove = "";
+        lastPvMoves = [];
+        lastAnalyzedTurn = null;
+        lastRenderedFenForArrows = "";
+        lastObservedBoardFenPart = "";
+        if (pendingAnalyzeTimeout) {
+            clearTimeout(pendingAnalyzeTimeout);
+            pendingAnalyzeTimeout = null;
+        }
+        scheduledFenForAnalyze = "";
+        // Keep latestLiveFen cache so manual scan can still recover when
+        // direct sources are temporarily unavailable right after reset.
+        playerColor = null;
+        lastPlayerColorSource = "unknown";
+        clearArrows();
+        debugLog('H15', 'ChessCheats.user.js:resetRuntimeState', 'runtime state reset', { reason: reason });
+    }
+
+    function hideBestMoveText() {
+        const bestMoveEl = document.getElementById('best-move-text');
+        const bestMoveMetaEl = document.getElementById('best-move-meta');
+        if (bestMoveEl) {
+            bestMoveEl.innerText = "-";
+            bestMoveEl.classList.remove('promotion-highlight');
+        }
+        if (bestMoveMetaEl) {
+            bestMoveMetaEl.innerText = "";
+            bestMoveMetaEl.classList.remove('promotion-meta');
+        }
+    }
+
+    function parseBoardFromFen(fen) {
+        const normalizedFen = normalizeFen(fen);
+        if (!normalizedFen) return null;
+        const parts = normalizedFen.split(/\s+/);
+        const boardPart = parts[0];
+        const rows = boardPart.split('/');
+        if (rows.length !== 8) return null;
+        const board = {};
+        const files = "abcdefgh";
+
+        for (let rankIdx = 0; rankIdx < 8; rankIdx += 1) {
+            const row = rows[rankIdx];
+            let fileIdx = 0;
+            for (const ch of row) {
+                if (/\d/.test(ch)) {
+                    fileIdx += parseInt(ch, 10);
+                    continue;
+                }
+                if (fileIdx < 0 || fileIdx > 7) return null;
+                const color = (ch === ch.toUpperCase()) ? 'w' : 'b';
+                const square = `${files[fileIdx]}${8 - rankIdx}`;
+                board[square] = { color: color, piece: ch.toLowerCase() };
+                fileIdx += 1;
+            }
+            if (fileIdx !== 8) return null;
+        }
+
+        return {
+            board: board,
+            sideToMove: parts[1] === 'b' ? 'b' : 'w'
+        };
+    }
+
+    function validateMoveAgainstFen(move, fen, expectedTurn = null) {
+        if (!move || typeof move !== 'string' || move.length < 4) return false;
+        const from = move.substring(0, 2).toLowerCase();
+        const to = move.substring(2, 4).toLowerCase();
+        if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return false;
+
+        const parsed = parseBoardFromFen(fen);
+        if (!parsed) return false;
+
+        const sourcePiece = parsed.board[from] || null;
+        const targetPiece = parsed.board[to] || null;
+        if (!sourcePiece) return false;
+
+        const activeTurn = (expectedTurn === 'w' || expectedTurn === 'b') ? expectedTurn : parsed.sideToMove;
+        if (sourcePiece.color !== activeTurn) return false;
+        if (targetPiece && sourcePiece.color === targetPiece.color) return false;
+        return true;
+    }
+
+    function resolveSafeMoveForFen(fallbackMove, fen, currentTurn) {
+        if (lastPvMoves && lastPvMoves.length > 0) {
+            for (const pvMove of lastPvMoves) {
+                if (validateMoveAgainstFen(pvMove, fen, currentTurn)) return pvMove;
+            }
+        }
+        if (validateMoveAgainstFen(fallbackMove, fen, currentTurn)) return fallbackMove;
+        return null;
+    }
+    
+    function resetAnalysis() {
+        resetRuntimeState("manual-scan");
+        if (analyzeTimeoutId) {
+            clearTimeout(analyzeTimeoutId);
+            analyzeTimeoutId = null;
+        }
+        activeAnalyzeToken += 1;
+        const token = activeAnalyzeToken;
+        analyzeState = ANALYZE_STATE.SCANNING;
+        updateStatus("🔎 Scanning...");
+        document.getElementById('force-analyze')?.classList.add('scanning');
+        analyzeTimeoutId = setTimeout(() => {
+            if (token !== activeAnalyzeToken || analyzeState !== ANALYZE_STATE.SCANNING) return;
+            analyzeState = ANALYZE_STATE.FAILED;
+            document.getElementById('force-analyze')?.classList.remove('scanning');
+            updateStatus("⚠️ Scan timeout - thử lại");
+        }, 8000);
+        const liveFen = normalizeFen(getCurrentFenFromBoard());
+        if (liveFen) {
+            scheduleAnalyzeCurrentPosition(liveFen);
+        } else {
+            analyzeState = ANALYZE_STATE.ERROR;
+            document.getElementById('force-analyze')?.classList.remove('scanning');
+            updateStatus("❌ Không đọc được bàn cờ");
+        }
+    }
+    
+    function handleBestMove(m) { 
+        if (analyzeTimeoutId) {
+            clearTimeout(analyzeTimeoutId);
+            analyzeTimeoutId = null;
+        }
+        document.getElementById('force-analyze')?.classList.remove('scanning');
+        if(!m || m==="(none)" || !isScriptEnabled) {
+            analyzeState = ANALYZE_STATE.FAILED;
+            updateStatus("⚠️ Không có nước đi hợp lệ");
+            return;
+        }
+        analyzeState = ANALYZE_STATE.VERIFIED;
+
+        // Re-detect player color every time to ensure accuracy
+        playerColor = detectPlayerColor();
+
+        // Always bind move validation/rendering to the latest board state.
+        const latestFen = normalizeFen(getCurrentFenFromBoard());
+        const currentTurn = latestFen ? getCurrentTurnFromFen(latestFen) : null;
+        console.log("FEN:", latestFen);
+        console.log("Turn from FEN:", currentTurn);
+        console.log("Player color:", playerColor);
+        if (!currentTurn) {
+            clearArrows();
+            hideBestMoveText();
+            updateStatus("⏳ Đang chờ đối thủ...");
+            return;
+        }
+        const safeMove = latestFen ? resolveSafeMoveForFen(m, latestFen, currentTurn) : null;
+
+        // #region agent log
+        debugLog('H5', 'ChessCheats.user.js:handleBestMove', 'turn resolved for UI', {
+            bestMove: m,
+            lastFen: latestFen || lastFen,
+            playerColor: playerColor,
+            currentTurn: currentTurn,
+            acceptedMove: safeMove
+        });
+        // #endregion
+
+        if (!safeMove) {
+            lastBestMove = "";
+            clearArrows();
+            hideBestMoveText();
+            updateStatus("⚠️ Bỏ qua nước đi không hợp lệ");
+            return;
+        }
+
+        lastBestMove = safeMove;
+        const bestMoveEl = document.getElementById('best-move-text');
+        const bestMoveMetaEl = document.getElementById('best-move-meta');
+        const parsedBestMove = parsePromotionMove(safeMove);
+        if (bestMoveEl) {
+            bestMoveEl.innerText = parsedBestMove.display;
+            bestMoveEl.classList.toggle('promotion-highlight', !!parsedBestMove.promotion);
+        }
+        if (bestMoveMetaEl) {
+            bestMoveMetaEl.innerText = parsedBestMove.promotion ? `${parsedBestMove.icon} ${parsedBestMove.promotionLabel}` : "";
+            bestMoveMetaEl.classList.toggle('promotion-meta', !!parsedBestMove.promotion);
+        }
+        
+        // Cập nhật hiển thị lượt đi
+        updateTurnDisplay(currentTurn);
+        
+        // Cập nhật màu quân người chơi
+        const colorEl = document.getElementById('player-color-display');
+        if (playerColor === 'w') {
+            colorEl.innerText = "⬜ Quân Trắng";
+            colorEl.style.color = "#fff";
+        } else if (playerColor === 'b') {
+            colorEl.innerText = "⬛ Quân Đen";
+            colorEl.style.color = "#888";
+        }
+
+        // Only show hint when it is actually your turn.
+        if (currentTurn !== playerColor) {
+            clearArrows();
+            hideBestMoveText();
+            updateStatus("⏳ Đang chờ đối thủ...");
+            return;
+        }
+
+        const moveToRender = resolvePrimaryMoveToRender(safeMove, currentTurn);
+        updateStatus("✨ Đến lượt bạn!");
+        const primaryMoveInfo = parsePromotionMove(moveToRender);
+        drawMoveArrows(moveToRender, null, {
+            primaryPromotion: primaryMoveInfo.promotion
+        });
+    }
+
+    function parsePromotionMove(move) {
+        const rawMove = (move || "").toLowerCase();
+        const promotion = (rawMove.length === 5 && /[qrbn]/.test(rawMove[4])) ? rawMove[4] : null;
+        const toSquare = rawMove.length >= 4 ? rawMove.substring(2, 4) : null;
+        if (!promotion) {
+            return {
+                move: rawMove,
+                promotion: null,
+                toSquare: toSquare,
+                display: rawMove ? rawMove.toUpperCase() : "-",
+                promotionLabel: "",
+                icon: ""
+            };
+        }
+
+        const promotionMap = {
+            q: { text: "Phong hậu", icon: "♕", code: "Q" },
+            r: { text: "Phong xe", icon: "♖", code: "R" },
+            b: { text: "Phong tượng", icon: "♗", code: "B" },
+            n: { text: "Phong mã", icon: "♘", code: "N" }
+        };
+        const meta = promotionMap[promotion];
+        return {
+            move: rawMove,
+            promotion: promotion,
+            toSquare: toSquare,
+            display: `${toSquare}=${meta.code}`,
+            promotionLabel: meta.text,
+            icon: meta.icon
+        };
+    }
+
+    function rememberLatestFen(rawFen, source) {
+        const normalized = normalizeFen(rawFen);
+        if (!normalized) return null;
+        latestLiveFen = normalized;
+        latestLiveFenSource = source || "unknown";
+        latestLiveFenTimestamp = Date.now();
+        return normalized;
+    }
+
+    function resolveTurnHintFromObjects() {
+        const rootWindow = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+        const turnCandidates = [
+            typeof rootWindow.game?.turn === 'function' ? rootWindow.game.turn() : rootWindow.game?.turn,
+            typeof rootWindow.game?.getTurn === 'function' ? rootWindow.game.getTurn() : rootWindow.game?.getTurn,
+            typeof rootWindow.chess?.turn === 'function' ? rootWindow.chess.turn() : rootWindow.chess?.turn,
+            typeof rootWindow.board?.game?.turn === 'function' ? rootWindow.board.game.turn() : rootWindow.board?.game?.turn
+        ];
+        for (const value of turnCandidates) {
+            if (!value) continue;
+            const normalized = String(value).trim().toLowerCase();
+            if (normalized === 'w' || normalized === 'white') return 'w';
+            if (normalized === 'b' || normalized === 'black') return 'b';
+        }
+        return null;
+    }
+
+    function normalizeFenFlexible(rawValue) {
+        if (typeof rawValue !== 'string') return null;
+        const trimmed = rawValue.trim();
+        if (!trimmed) return null;
+        const direct = normalizeFen(trimmed);
+        if (direct) return direct;
+
+        // Some sources return only board-part FEN without side/castling clocks.
+        if (/^[prnbqkPRNBQK1-8\/]+$/.test(trimmed) && trimmed.split('/').length === 8) {
+            const turnHint = resolveTurnHintFromObjects() || getCurrentTurnFromFen(lastFen) || 'w';
+            return normalizeFen(`${trimmed} ${turnHint} - - 0 1`);
+        }
+        return null;
+    }
+
+    function looksLikeFenString(value) {
+        if (typeof value !== 'string') return false;
+        const text = value.trim();
+        if (!text) return false;
+        // Full-ish FEN: board + side (+ optional tail fields)
+        if (/^[prnbqkPRNBQK1-8\/]+\s+[wb](?:\s+[-KQkq]+|\s+-)?(?:\s+[a-h][36]|\s+-)?(?:\s+\d+)?(?:\s+\d+)?$/.test(text)) return true;
+        // Board-only FEN section
+        if (/^[prnbqkPRNBQK1-8\/]+$/.test(text) && text.split('/').length === 8) return true;
+        return false;
+    }
+
+    function extractFenFromUnknown(value, depth = 0, visited = new Set()) {
+        if (depth > 4 || value == null) return null;
+        if (typeof value === 'string') {
+            return looksLikeFenString(value) ? value.trim() : null;
+        }
+        if (typeof value !== 'object') return null;
+        if (visited.has(value)) return null;
+        visited.add(value);
+
+        const preferredKeys = ['fen', 'currentFen', 'position', 'boardFen', 'board', 'state', 'game'];
+        for (const key of preferredKeys) {
+            if (!(key in value)) continue;
+            const found = extractFenFromUnknown(value[key], depth + 1, visited);
+            if (found) return found;
+        }
+        for (const key of Object.keys(value)) {
+            const found = extractFenFromUnknown(value[key], depth + 1, visited);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    function tryFenSource(candidate, source) {
+        if (!candidate) return null;
+        let rawValue = null;
+        try {
+            rawValue = (typeof candidate === 'function') ? candidate() : candidate;
+        } catch (e) {
+            return null;
+        }
+        let rawFen = null;
+        if (typeof rawValue === 'string') {
+            rawFen = rawValue;
+        } else if (rawValue && typeof rawValue === 'object') {
+            if (typeof rawValue.fen === 'string') rawFen = rawValue.fen;
+            else if (typeof rawValue.position === 'string') rawFen = rawValue.position;
+            else if (typeof rawValue.currentFen === 'string') rawFen = rawValue.currentFen;
+            else rawFen = extractFenFromUnknown(rawValue);
+        }
+        const normalized = normalizeFenFlexible(rawFen);
+        if (!normalized) return null;
+        latestLiveFen = normalized;
+        latestLiveFenSource = source || "unknown";
+        latestLiveFenTimestamp = Date.now();
+        return normalized;
+    }
+
+    function resolveFenFromGameObjects() {
+        const rootWindow = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+        const fenGetters = [
+            { label: 'game.getFen', getter: () => rootWindow.game?.getFen?.() },
+            { label: 'game.fen()', getter: () => rootWindow.game?.fen?.() },
+            { label: 'game.fen', getter: () => rootWindow.game?.fen },
+            { label: 'game.chess.fen()', getter: () => rootWindow.game?.chess?.fen?.() },
+            { label: 'game.chess.fen', getter: () => rootWindow.game?.chess?.fen },
+            { label: 'chess.fen()', getter: () => rootWindow.chess?.fen?.() },
+            { label: 'chess.fen', getter: () => rootWindow.chess?.fen },
+            { label: 'board.game.fen()', getter: () => rootWindow.board?.game?.fen?.() },
+            { label: 'board.game.fen', getter: () => rootWindow.board?.game?.fen },
+            { label: 'board.fen()', getter: () => rootWindow.board?.fen?.() },
+            { label: 'board.fen', getter: () => rootWindow.board?.fen },
+            { label: 'game.state', getter: () => rootWindow.game?.state },
+            { label: 'game.position', getter: () => rootWindow.game?.position }
+        ];
+        for (const src of fenGetters) {
+            const resolved = tryFenSource(src.getter, src.label);
+            if (resolved) {
+                return resolved;
+            }
+        }
+        return null;
+    }
+
+    function resolveFenFromBoardObject(board) {
+        if (!board) return null;
+        const boardGetters = [
+            { label: 'board.getFen()', getter: () => board.getFen?.() },
+            { label: 'board.fen()', getter: () => board.fen?.() },
+            { label: 'board.fen', getter: () => board.fen },
+            { label: 'board.game.getFen()', getter: () => board.game?.getFen?.() },
+            { label: 'board.game.fen()', getter: () => board.game?.fen?.() },
+            { label: 'board.game.fen', getter: () => board.game?.fen },
+            { label: 'board.chess.fen()', getter: () => board.chess?.fen?.() },
+            { label: 'board.chess.fen', getter: () => board.chess?.fen },
+            { label: 'board.state.fen', getter: () => board.state?.fen },
+            { label: 'board.position.fen', getter: () => board.position?.fen }
+        ];
+        for (const src of boardGetters) {
+            const resolved = tryFenSource(src.getter, src.label);
+            if (resolved) return resolved;
+        }
+        return null;
+    }
+
+    function buildBoardPartFromDom(board) {
+        if (!board) return null;
+        const grid = Array.from({ length: 8 }, () => Array(8).fill(null));
+        const pieceNodes = board.querySelectorAll('.piece, [data-piece], [class*="square-"]');
+        if (!pieceNodes || pieceNodes.length === 0) return null;
+
+        for (const node of pieceNodes) {
+            const className = (node.className || "").toString();
+            const dataSquare = (node.getAttribute?.('data-square') || "").toLowerCase();
+            const squareClass = className.match(/square-(\d)(\d)/);
+            let file = null;
+            let rank = null;
+            if (/^[a-h][1-8]$/.test(dataSquare)) {
+                file = dataSquare.charCodeAt(0) - 96; // a->1
+                rank = parseInt(dataSquare[1], 10);
+            } else if (squareClass) {
+                file = parseInt(squareClass[1], 10);
+                rank = parseInt(squareClass[2], 10);
+            }
+            if (!file || !rank || file < 1 || file > 8 || rank < 1 || rank > 8) continue;
+
+            const pieceClass = className.match(/\b([wb])([prnbqk])\b/i);
+            const dataPiece = (node.getAttribute?.('data-piece') || "").toLowerCase();
+            let color = null;
+            let piece = null;
+            if (pieceClass) {
+                color = pieceClass[1].toLowerCase();
+                piece = pieceClass[2].toLowerCase();
+            } else if (/^[wb][prnbqk]$/.test(dataPiece)) {
+                color = dataPiece[0];
+                piece = dataPiece[1];
+            }
+            if (!color || !piece) continue;
+
+            const fenPiece = color === 'w' ? piece.toUpperCase() : piece.toLowerCase();
+            const row = 8 - rank;
+            const col = file - 1;
+            grid[row][col] = fenPiece;
+        }
+
+        const rows = [];
+        for (let r = 0; r < 8; r += 1) {
+            let rowFen = "";
+            let empty = 0;
+            for (let c = 0; c < 8; c += 1) {
+                const p = grid[r][c];
+                if (!p) {
+                    empty += 1;
+                } else {
+                    if (empty > 0) {
+                        rowFen += String(empty);
+                        empty = 0;
+                    }
+                    rowFen += p;
+                }
+            }
+            if (empty > 0) rowFen += String(empty);
+            rows.push(rowFen || "8");
+        }
+        const boardPart = rows.join('/');
+        return boardPart.split('/').length === 8 ? boardPart : null;
+    }
+
+    function detectTurnFromLiveUiFallback() {
+        const whiteTurnClock = document.querySelector('.clock-player-white.clock-player-turn, .clock-white.clock-player-turn, [data-player-color="white"].clock-player-turn');
+        if (whiteTurnClock) return 'w';
+        const blackTurnClock = document.querySelector('.clock-player-black.clock-player-turn, .clock-black.clock-player-turn, [data-player-color="black"].clock-player-turn');
+        if (blackTurnClock) return 'b';
+
+        const plyNodes = document.querySelectorAll('[data-ply]');
+        if (plyNodes && plyNodes.length > 0) {
+            let maxPly = -1;
+            plyNodes.forEach((node) => {
+                const ply = parseInt(node.getAttribute('data-ply') || "", 10);
+                if (!Number.isNaN(ply) && ply > maxPly) maxPly = ply;
+            });
+            if (maxPly >= 0) return (maxPly % 2 === 1) ? 'b' : 'w';
+        }
+
+        return getCurrentTurnFromFen(lastFen) || 'w';
+    }
+
+    function buildFenFromDomFallback(board) {
+        const boardPart = buildBoardPartFromDom(board);
+        if (!boardPart) return null;
+        const turn = detectTurnFromLiveUiFallback();
+        return normalizeFen(`${boardPart} ${turn} - - 0 1`);
+    }
+
+    function getActiveBoardElement() {
+        const boards = Array.from(document.querySelectorAll('chess-board, wc-chess-board'));
+        if (!boards.length) return null;
+        if (boards.length === 1) return boards[0];
+        let bestBoard = null;
+        let bestScore = -1;
+        for (const board of boards) {
+            if (!board || !board.isConnected) continue;
+            const rect = board.getBoundingClientRect();
+            const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+            const isVisible = rect.width > 120 && rect.height > 120;
+            if (!isVisible) continue;
+            const zIndex = parseInt(window.getComputedStyle(board).zIndex || "0", 10) || 0;
+            const score = area + (zIndex > 0 ? zIndex : 0);
+            if (score > bestScore) {
+                bestScore = score;
+                bestBoard = board;
+            }
+        }
+        return bestBoard || boards[0];
+    }
+
+    function installFenSyncHooks() {
+        const recordFenFromEvent = (evt, source) => {
+            const detail = evt?.detail || null;
+            const candidates = [
+                detail?.fen,
+                detail?.position?.fen,
+                detail?.game?.fen,
+                detail?.state?.fen,
+                extractFenFromUnknown(detail)
+            ];
+            for (const candidate of candidates) {
+                const remembered = rememberLatestFen(candidate, source);
+                if (remembered) {
+                    return;
+                }
+            }
+        };
+        const eventNames = ['move', 'chessmove', 'chess:move', 'board:move', 'positionchange'];
+        eventNames.forEach((eventName) => {
+            document.addEventListener(eventName, (evt) => recordFenFromEvent(evt, `event:${eventName}`), true);
+            window.addEventListener(eventName, (evt) => recordFenFromEvent(evt, `window-event:${eventName}`), true);
+        });
+
+        const observeBoard = () => {
+            const board = getActiveBoardElement();
+            if (!board || board.__uwuFenObserverAttached) return;
+            const observer = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    if (mutation.type !== 'attributes') continue;
+                    if (mutation.attributeName !== 'data-fen' && mutation.attributeName !== 'fen') continue;
+                    const fenAttr = board.getAttribute('data-fen') || board.getAttribute('fen');
+                    rememberLatestFen(fenAttr, `board-attr:${mutation.attributeName}`);
+                }
+            });
+            observer.observe(board, { attributes: true, attributeFilter: ['data-fen', 'fen'] });
+            board.__uwuFenObserverAttached = true;
+        };
+        observeBoard();
+        setInterval(observeBoard, 1000);
+    }
+
+    function analyzeCurrentPosition() {
+        if (!engine || !isScriptEnabled || !warningAcknowledged || !accessUnlocked) return;
+        pendingAnalyzeTimeout = null;
+        scheduledFenForAnalyze = "";
+        const fen = normalizeFen(getCurrentFenFromBoard());
+        if (!fen) {
+            analyzeState = ANALYZE_STATE.ERROR;
+            document.getElementById('force-analyze')?.classList.remove('scanning');
+            updateStatus("❌ Lỗi bàn cờ!");
+            return;
+        }
+        if (fen === lastFen) {
+            analyzeState = ANALYZE_STATE.IDLE;
+            document.getElementById('force-analyze')?.classList.remove('scanning');
+            updateStatus("✅ Đã quét xong");
+            return;
+        }
+        // #region agent log
+        debugLog('H7', 'ChessCheats.user.js:analyzeCurrentPosition', 'send position to engine', { fen: fen, prevFen: lastFen });
+        // #endregion
+        playerColor = detectPlayerColor();
+        const currentTurn = getCurrentTurnFromFen(fen);
+        console.log("FEN:", fen);
+        console.log("Turn from FEN:", currentTurn);
+        console.log("Player color:", playerColor);
+        if (!currentTurn) {
+            console.warn("Invalid FEN side-to-move, skip analysis:", fen);
+            analyzeState = ANALYZE_STATE.ERROR;
+            document.getElementById('force-analyze')?.classList.remove('scanning');
+            updateStatus("⚠️ Không đọc được lượt đi từ FEN");
+            return;
+        }
+        lastFen = fen; 
+        lastAnalyzedTurn = currentTurn;
+        const engineFen = fen;
+        if (!engineFen) {
+            updateStatus("❌ FEN không hợp lệ!");
+            return;
+        }
+        updateStatus("🧠 Đang tính...");
+        engine.postMessage('stop'); 
+        engine.postMessage(`position fen ${engineFen}`);
+        engine.postMessage(`go movetime 200 depth 18`);
+    }
+
+    function scheduleAnalyzeCurrentPosition(expectedFen = "") {
+        if (!engine || !isScriptEnabled || !warningAcknowledged || !accessUnlocked) return;
+        if (!expectedFen) return;
+        if (scheduledFenForAnalyze === expectedFen && pendingAnalyzeTimeout) return;
+        if (pendingAnalyzeTimeout) clearTimeout(pendingAnalyzeTimeout);
+        scheduledFenForAnalyze = expectedFen;
+        pendingAnalyzeTimeout = setTimeout(() => {
+            analyzeCurrentPosition();
+        }, 200);
+    }
+
+    function getCurrentFenFromBoard() {
+        const directFen = resolveFenFromGameObjects();
+        if (directFen) return directFen;
+
+        const board = getActiveBoardElement();
+        if (board) {
+            const boardObjectFen = resolveFenFromBoardObject(board);
+            if (boardObjectFen) return boardObjectFen;
+            const attrFen = rememberLatestFen(board.getAttribute('data-fen') || board.getAttribute('fen'), 'board-attribute');
+            if (attrFen) return attrFen;
+            // Live games often store state in custom attributes/JSON payloads.
+            const attrCandidates = [
+                board.getAttribute('position'),
+                board.getAttribute('data-position'),
+                board.getAttribute('state'),
+                board.getAttribute('data-state'),
+                board.getAttribute('data-game'),
+                board.getAttribute('game-state')
+            ];
+            for (const attr of attrCandidates) {
+                if (!attr) continue;
+                const fromAttr = normalizeFenFlexible(attr);
+                if (fromAttr) return rememberLatestFen(fromAttr, 'board-state-attribute');
+                try {
+                    const parsed = JSON.parse(attr);
+                    const deepFen = normalizeFenFlexible(extractFenFromUnknown(parsed));
+                    if (deepFen) return rememberLatestFen(deepFen, 'board-state-json');
+                } catch (e) {}
+            }
+            const domFen = buildFenFromDomFallback(board);
+            if (domFen) return rememberLatestFen(domFen, 'dom-piece-fallback');
+        }
+
+        if (latestLiveFen) return latestLiveFen;
+        return null;
+    }
+
+    function updateTurnDisplay(currentTurn) {
+        const turnEl = document.getElementById('turn-display');
+        if (!turnEl) return;
+        if (currentTurn === 'w') {
+            turnEl.innerText = "⬜ Trắng đi";
+            turnEl.className = "uwu-card-value";
+            turnEl.style.color = "#fff";
+            return;
+        }
+        if (currentTurn === 'b') {
+            turnEl.innerText = "⬛ Đen đi";
+            turnEl.className = "uwu-card-value";
+            turnEl.style.color = "#888";
+            return;
+        }
+        turnEl.innerText = "-";
+        turnEl.className = "uwu-card-value";
+        turnEl.style.color = "#fbbf24";
+    }
+
+    function getPieceAt(board, square) {
+        if (!board || !square || !/^[a-h][1-8]$/i.test(square)) return null;
+        const file = square.toLowerCase().charCodeAt(0) - 96;
+        const rank = parseInt(square[1], 10);
+        const selector = `.piece.square-${file}${rank}`;
+        const pieceEl = board.querySelector(selector);
+        if (!pieceEl) return null;
+        const className = pieceEl.className || "";
+        const pieceMatch = className.match(/\bpiece\s+([wb])([prnbqk])\b/i);
+        if (!pieceMatch) return null;
+        return {
+            color: pieceMatch[1].toLowerCase(),
+            piece: pieceMatch[2].toLowerCase()
+        };
+    }
+
+    function isSelfCaptureMove(move, board) {
+        if (!move || move.length < 4) return true;
+        const from = move.substring(0, 2).toLowerCase();
+        const to = move.substring(2, 4).toLowerCase();
+        const sourcePiece = getPieceAt(board, from);
+        const targetPiece = getPieceAt(board, to);
+        if (!sourcePiece) return true;
+        if (targetPiece && sourcePiece.color === targetPiece.color) {
+            return true;
+        }
+        return false;
+    }
+
+    function detectPlayerColorCandidate() {
+        const board = getActiveBoardElement();
+        if (!board) return null;
+
+        // 1) Board orientation is the most stable source for player's side.
+        const orientation = (board.getAttribute('orientation') || "").toLowerCase();
+        if (orientation === "black") return { color: "b", source: "orientation", strong: true };
+        if (orientation === "white") return { color: "w", source: "orientation", strong: true };
+
+        // 2) Kiểm tra class flipped
+        if (board.classList.contains('flipped')) return { color: "b", source: "class-flipped", strong: true };
+
+        // 3) Kiểm tra data-orientation
+        if (board.dataset.orientation === "black") return { color: "b", source: "data-orientation", strong: true };
+        if (board.dataset.orientation === "white") return { color: "w", source: "data-orientation", strong: true };
+
+        // 4) Kiểm tra board-layout
+        if (document.querySelector('.board-layout-player-bottom.black')) return { color: "b", source: "board-layout", strong: true };
+        if (document.querySelector('.board-layout-player-bottom.white')) return { color: "w", source: "board-layout", strong: true };
+
+        // 5) Try game API as fallback only (can be unreliable in some modes).
+        try {
+            if (unsafeWindow.game && typeof unsafeWindow.game.getOurColor === 'function') {
+                const color = unsafeWindow.game.getOurColor();
+                if (color === 'w' || color === 'b') return { color: color, source: "game.getOurColor", strong: true };
+            }
+        } catch (e) {}
+
+        // 6) Fallback: Kiểm tra quân ở hàng dưới/trên
+        const pieces = board.querySelectorAll('.piece');
+        let bottomRowColor = null;
+        let topRowColor = null;
+        pieces.forEach(p => {
+            const squareMatch = p.className.match(/square-(\d)(\d)/);
+            if (squareMatch) {
+                const row = parseInt(squareMatch[2]);
+                const pieceMatch = p.className.match(/piece ([wb])/);
+                if (pieceMatch) {
+                    if (row === 1 && !bottomRowColor) bottomRowColor = pieceMatch[1];
+                    if (row === 8 && !topRowColor) topRowColor = pieceMatch[1];
+                }
+            }
+        });
+        
+        // Nếu không lật: quân trắng ở hàng 1 (dưới), quân đen ở hàng 8 (trên)
+        // Nếu lật: quân đen ở hàng 1 (trên), quân trắng ở hàng 8 (dưới)
+        if (bottomRowColor === 'w') return { color: 'w', source: "piece-layout-bottom", strong: false };
+        if (bottomRowColor === 'b') return { color: 'b', source: "piece-layout-bottom", strong: false };
+        if (topRowColor === 'w') return { color: 'b', source: "piece-layout-top", strong: false };
+        if (topRowColor === 'b') return { color: 'w', source: "piece-layout-top", strong: false };
+
+        return null;
+    }
+
+    function detectPlayerColor() {
+        const candidate = detectPlayerColorCandidate();
+        if (!candidate) {
+            return playerColor;
+        }
+
+        if (candidate.strong || !playerColor) {
+            if (candidate.color !== playerColor || candidate.source !== lastPlayerColorSource) {
+                debugLog('H13', 'ChessCheats.user.js:detectPlayerColor', 'player color updated', {
+                    previousColor: playerColor,
+                    nextColor: candidate.color,
+                    source: candidate.source,
+                    strong: candidate.strong
+                });
+            }
+            lastPlayerColorSource = candidate.source;
+            return candidate.color;
+        }
+
+        if (candidate.color === playerColor) {
+            lastPlayerColorSource = candidate.source;
+            return playerColor;
+        }
+
+        debugLog('H13', 'ChessCheats.user.js:detectPlayerColor', 'weak source mismatch, keep previous color', {
+            previousColor: playerColor,
+            weakColor: candidate.color,
+            source: candidate.source
+        });
+        return playerColor;
+    }
+
+    function resolvePrimaryMoveToRender(fallbackMove, currentTurn) {
+        if (playerColor !== 'w' && playerColor !== 'b') {
+            debugLog('H14', 'ChessCheats.user.js:resolvePrimaryMoveToRender', 'skip arrow rendering: player color unresolved', {
+                playerColor: playerColor,
+                source: lastPlayerColorSource
+            });
+            return null;
+        }
+        if (currentTurn !== 'w' && currentTurn !== 'b') {
+            debugLog('H14', 'ChessCheats.user.js:resolvePrimaryMoveToRender', 'skip arrow rendering: turn unresolved', {
+                currentTurn: currentTurn
+            });
+            return null;
+        }
+        if (currentTurn !== playerColor) {
+            debugLog('H14', 'ChessCheats.user.js:resolvePrimaryMoveToRender', 'skip arrow rendering: opponent turn', {
+                playerColor: playerColor,
+                currentTurn: currentTurn
+            });
+            return null;
+        }
+        return (lastPvMoves && lastPvMoves.length > 0) ? (lastPvMoves[0] || fallbackMove) : fallbackMove;
+    }
+
+    function clearArrows() {
+        const el = document.getElementById('uwu-arrow-layer');
+        if(el) el.remove();
+        document.querySelectorAll('.uwu-promotion-burst, .uwu-promotion-ring, .uwu-promotion-particle').forEach((node) => node.remove());
+    }
+    
+    function drawMoveArrows(primaryMove, secondaryMove, options = {}) {
+        clearArrows();
+        const board = getActiveBoardElement();
+        if (!board) return;
+
+        if (!primaryMove && !secondaryMove) return;
+
+        const layer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        layer.id = "uwu-arrow-layer";
+        layer.setAttribute("viewBox", "0 0 800 800");
+        layer.innerHTML = `<defs>
+            <marker id="uwu-arrowhead-green" markerWidth="5" markerHeight="5" refX="3.8" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5 Z" fill="rgba(52,211,153,0.95)"/></marker>
+            <marker id="uwu-arrowhead-red" markerWidth="5" markerHeight="5" refX="3.8" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5 Z" fill="rgba(248,113,113,0.95)"/></marker>
+        </defs>`;
+
+        const appendArrow = (move, color, markerId, width, isPromotionArrow = false) => {
+            if (!move || move.length < 4) return;
+            const from = move.substring(0,2);
+            const to = move.substring(2,4);
+            if (isSelfCaptureMove(move, board)) return;
+            const fC = squareToCoords(from, board);
+            const tC = squareToCoords(to, board);
+            if (!fC || !tC) return;
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("class", "best-move-arrow");
+            line.setAttribute("x1", String(fC.x));
+            line.setAttribute("y1", String(fC.y));
+            line.setAttribute("x2", String(tC.x));
+            line.setAttribute("y2", String(tC.y));
+            line.setAttribute("stroke", color);
+            line.setAttribute("stroke-width", String(width));
+            line.setAttribute("stroke-linecap", "round");
+            line.setAttribute("marker-end", `url(#${markerId})`);
+            if (isPromotionArrow) {
+                line.classList.add("promo-neon");
+            }
+            layer.appendChild(line);
+        };
+
+        appendArrow(secondaryMove, "rgba(248,113,113,0.75)", "uwu-arrowhead-red", 10);
+        appendArrow(primaryMove, "rgba(52,211,153,0.85)", "uwu-arrowhead-green", 14, !!options.primaryPromotion);
+        board.appendChild(layer);
+        if (options.primaryPromotion && primaryMove && primaryMove.length >= 4) {
+            showPromotionSquareEffect(board, primaryMove.substring(2, 4));
+        }
+    }
+
+    function showPromotionSquareEffect(board, square) {
+        const target = squareToPercent(square, board);
+        if (!target) return;
+        const burst = document.createElement('div');
+        burst.className = 'uwu-promotion-burst';
+        burst.style.left = `${target.leftPercent}%`;
+        burst.style.top = `${target.topPercent}%`;
+
+        const ring = document.createElement('div');
+        ring.className = 'uwu-promotion-ring';
+        ring.style.left = `${target.leftPercent}%`;
+        ring.style.top = `${target.topPercent}%`;
+
+        board.appendChild(ring);
+        board.appendChild(burst);
+
+        const cx = target.leftPercent + 6.25;
+        const cy = target.topPercent + 6.25;
+        for (let i = 0; i < 8; i += 1) {
+            const particle = document.createElement('div');
+            const angle = (Math.PI * 2 * i) / 8;
+            const distance = 12 + (i % 3) * 4;
+            particle.className = 'uwu-promotion-particle';
+            particle.style.left = `${cx}%`;
+            particle.style.top = `${cy}%`;
+            particle.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
+            particle.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
+            board.appendChild(particle);
+            setTimeout(() => particle.remove(), 650);
+        }
+
+        setTimeout(() => {
+            burst.remove();
+            ring.remove();
+        }, 700);
+    }
+
+    function squareToCoords(s, b) {
+        const f = s.charCodeAt(0)-97, r = parseInt(s[1])-1;
+        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
+        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        let x = isFlipped ? (7-f) : f, y = isFlipped ? r : (7-r);
+        return { x: x*100+50, y: y*100+50 };
+    }
+
+    function squareToPercent(s, b) {
+        if (!s || s.length < 2) return null;
+        const f = s.charCodeAt(0)-97;
+        const r = parseInt(s[1], 10)-1;
+        if (f < 0 || f > 7 || Number.isNaN(r) || r < 0 || r > 7) return null;
+        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
+        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        const x = isFlipped ? (7-f) : f;
+        const y = isFlipped ? r : (7-r);
+        return {
+            leftPercent: x * 12.5,
+            topPercent: y * 12.5
+        };
+    }
+
+    installFenSyncHooks();
+
+    // --- MONITORING ---
+    let lastAnalyzedFen = "";
+    
+    setInterval(() => {
+        const board = getActiveBoardElement();
+        const gui = document.getElementById('uwu-gui');
+        if (board) {
+            ensureEntryFlowVisible();
+            if (!warningAcknowledged) {
+                showWarningOverlay();
+                if (gui) gui.style.display = 'none';
+                return;
+            }
+            if (!accessUnlocked) {
+                const hasHardlock = !!document.getElementById('uwu-hardlock-overlay');
+                if (!hasHardlock) {
+                    showAccessOverlay();
+                }
+                if (gui) gui.style.display = 'none';
+                return;
+            }
+            if (!gui) { 
+                createGUI(); 
+                initEngine(); 
+                playerColor = detectPlayerColor();
+                const colorEl = document.getElementById('player-color-display');
+                if (playerColor === 'w') {
+                    colorEl.innerText = "⬜ Quân Trắng";
+                    colorEl.style.color = "#fff";
+                } else if (playerColor === 'b') {
+                    colorEl.innerText = "⬛ Quân Đen";
+                    colorEl.style.color = "#888";
+                }
+            }
+            else {
+                gui.style.display = 'block';
+                if (isScriptEnabled) {
+                    const liveFen = normalizeFen(getCurrentFenFromBoard());
+                    const liveBoardPart = getFenBoardPart(liveFen);
+
+                    // Hard reset state at game restart to avoid stale board/pieces/turn leakage.
+                    if (
+                        liveBoardPart === START_POSITION_BOARD_FEN &&
+                        lastObservedBoardFenPart &&
+                        lastObservedBoardFenPart !== START_POSITION_BOARD_FEN
+                    ) {
+                        resetRuntimeState("new-game-detected");
+                    }
+                    if (liveBoardPart) lastObservedBoardFenPart = liveBoardPart;
+
+                    // Re-detect player color periodically to handle color switches
+                    const currentColor = detectPlayerColor();
+                    if (currentColor && currentColor !== playerColor) {
+                        playerColor = currentColor;
+                        const colorEl = document.getElementById('player-color-display');
+                        if (playerColor === 'w') {
+                            colorEl.innerText = "⬜ Quân Trắng";
+                            colorEl.style.color = "#fff";
+                        } else if (playerColor === 'b') {
+                            colorEl.innerText = "⬛ Quân Đen";
+                            colorEl.style.color = "#888";
+                        }
+                    }
+                    
+                    // Auto scan FEN
+                    const fen = liveFen;
+                    if (fen && fen !== lastAnalyzedFen) {
+                        lastAnalyzedFen = fen;
+                        scheduleAnalyzeCurrentPosition(fen);
+                    }
+
+                    // Update turn display continuously, independent from bestmove callback.
+                    if (fen) {
+                        const liveTurn = getCurrentTurnFromFen(fen);
+                        console.log("FEN:", fen);
+                        console.log("Turn from FEN:", liveTurn);
+                        console.log("Player color:", playerColor);
+                        updateTurnDisplay(liveTurn);
+                        if (liveTurn === playerColor) {
+                            updateStatus("✨ Đến lượt bạn!");
+                        } else {
+                            updateStatus("⏳ Đang chờ đối thủ...");
+                        }
+                    }
+                    
+                    // Refresh arrows whenever board changed so opponent move is visible.
+                    if (fen && (lastBestMove || (lastPvMoves && lastPvMoves.length)) && (fen !== lastRenderedFenForArrows || !document.getElementById('uwu-arrow-layer'))) {
+                        const liveTurn = getCurrentTurnFromFen(fen);
+                        if (!liveTurn || liveTurn !== playerColor) {
+                            clearArrows();
+                            hideBestMoveText();
+                            updateStatus("⏳ Đang chờ đối thủ...");
+                            lastRenderedFenForArrows = fen;
+                        } else {
+                            const safeLiveMove = resolveSafeMoveForFen(lastBestMove, fen, liveTurn);
+                            const primaryMove = resolvePrimaryMoveToRender(safeLiveMove, liveTurn);
+                            const moveInfo = parsePromotionMove(primaryMove);
+                            drawMoveArrows(primaryMove, null, {
+                                primaryPromotion: moveInfo.promotion
+                            });
+                            lastRenderedFenForArrows = fen;
+                        }
+                    }
+                }
+            }
+        } else if (gui) {
+            gui.style.display = 'none';
+        }
+    }, 300);
+})();
