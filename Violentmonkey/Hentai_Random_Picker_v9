@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      8.0
+// @version      9.0
 // @description  Random truyện vi-hentai
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -47,7 +47,7 @@
     document.body.appendChild(btn);
 
     // =========================
-    // DRAG
+    // DRAG FLOAT BUTTON
     // =========================
     let dragging = false;
     let moved = false;
@@ -116,7 +116,7 @@
         left:50%;
         transform:translate(-50%,-50%);
         width:90%;
-        max-width:420px;
+        max-width:300px;
         max-height:80vh;
         overflow:auto;
         background:#111;
@@ -131,9 +131,11 @@
     `;
 
     panel.innerHTML = `
-        <h2 style="
+        <h2 id="dragHeader" style="
             text-align:center;
             margin-bottom:15px;
+            cursor:move;
+            user-select:none;
         ">
             🎲 Random Truyện
         </h2>
@@ -179,6 +181,80 @@
     `;
 
     document.body.appendChild(panel);
+
+    // =========================
+    // DRAG PANEL
+    // =========================
+    let panelDragging = false;
+
+    let panelOffsetX = 0;
+    let panelOffsetY = 0;
+
+    const dragHeader =
+        panel.querySelector("#dragHeader");
+
+    dragHeader.addEventListener(
+        "mousedown",
+        startPanelDrag
+    );
+
+    dragHeader.addEventListener(
+        "touchstart",
+        startPanelDrag
+    );
+
+    function startPanelDrag(e) {
+
+        panelDragging = true;
+
+        const touch =
+            e.touches ? e.touches[0] : e;
+
+        const rect =
+            panel.getBoundingClientRect();
+
+        panelOffsetX =
+            touch.clientX - rect.left;
+
+        panelOffsetY =
+            touch.clientY - rect.top;
+
+        panel.style.transform = "none";
+    }
+
+    document.addEventListener(
+        "mousemove",
+        movePanel
+    );
+
+    document.addEventListener(
+        "touchmove",
+        movePanel
+    );
+
+    function movePanel(e) {
+
+        if (!panelDragging) return;
+
+        const touch =
+            e.touches ? e.touches[0] : e;
+
+        panel.style.left =
+            `${touch.clientX - panelOffsetX}px`;
+
+        panel.style.top =
+            `${touch.clientY - panelOffsetY}px`;
+    }
+
+    document.addEventListener(
+        "mouseup",
+        () => panelDragging = false
+    );
+
+    document.addEventListener(
+        "touchend",
+        () => panelDragging = false
+    );
 
     // =========================
     // STYLE
@@ -246,7 +322,6 @@
 
         let added = 0;
 
-        // chống trùng
         const existing =
             new Set(
                 stories.map(s => s.url)
@@ -268,20 +343,17 @@
 
                 const slug = match[1];
 
-                // link chuẩn
                 const storyUrl =
                     location.origin +
                     "/truyen/" +
                     slug;
 
-                // đã tồn tại
                 if (
                     existing.has(storyUrl)
                 ) return;
 
                 existing.add(storyUrl);
 
-                // đổi slug thành tên đẹp
                 const name =
                     slug
                     .replace(/-/g, " ")
@@ -292,7 +364,7 @@
 
                 stories.push({
                     name,
-                    url: card.href // vẫn mở chap
+                    url: card.href
                 });
 
                 added++;
