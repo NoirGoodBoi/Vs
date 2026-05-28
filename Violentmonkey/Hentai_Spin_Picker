@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      6.0
+// @version      7.0
 // @description  Random truyện vi-hentai
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -248,36 +248,42 @@
 
         cards.forEach(card => {
 
-            let name = "";
+            try {
 
-            // CHỈ lấy từ alt/title ảnh
-            const img =
-                card.querySelector("img");
+                // ví dụ:
+                // /truyen/co-em-gai-mei-chan/chap-16
 
-            if (img) {
+                const path =
+                    new URL(card.href).pathname;
 
-                name =
-                    img.getAttribute("alt") ||
-                    img.getAttribute("title") ||
-                    "";
-            }
+                const match =
+                    path.match(
+                        /\/truyen\/([^/]+)/
+                    );
 
-            // nếu không có tên thì bỏ
-            if (!name) return;
+                if (!match) return;
 
-            name = name.trim();
+                const slug = match[1];
 
-            // lọc chap
-            if (
-                name.toLowerCase().includes("chap")
-            ) return;
+                // đổi slug => tên đẹp
+                const name =
+                    slug
+                    .replace(/-/g, " ")
+                    .replace(/\b\w/g,
+                        c => c.toUpperCase()
+                    )
+                    .trim();
 
-            stories.push({
-                name,
-                url: card.href
-            });
+                if (!name) return;
 
-            added++;
+                stories.push({
+                    name,
+                    url: card.href
+                });
+
+                added++;
+
+            } catch (err) {}
         });
 
         localStorage.setItem(
