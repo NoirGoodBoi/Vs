@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      5.0
 // @description  Random truyện vi-hentai
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -248,23 +248,61 @@
 
         links.forEach(link => {
 
-            // chỉ lấy tên truyện
-            let name =
-                link.querySelector("img")?.alt ||
-                link.querySelector("h3")?.innerText ||
-                "";
+            let name = "";
+
+            // ưu tiên alt ảnh
+            const img =
+                link.querySelector("img");
+
+            if (img?.alt) {
+                name = img.alt.trim();
+            }
+
+            // fallback h3
+            if (!name) {
+
+                const h3 =
+                    link.querySelector("h3");
+
+                if (h3) {
+                    name =
+                        h3.innerText.trim();
+                }
+            }
+
+            // fallback text khác
+            if (!name) {
+
+                const elements =
+                    link.querySelectorAll(
+                        "span, div"
+                    );
+
+                elements.forEach(el => {
+
+                    const text =
+                        el.innerText?.trim();
+
+                    if (
+                        text &&
+                        text.length > 2 &&
+                        text.length < 120 &&
+                        !text.toLowerCase()
+                            .includes("chap")
+                    ) {
+                        name = text;
+                    }
+                });
+            }
 
             name = name.trim();
 
             if (!name || name.length < 2)
                 return;
 
-            // KHÔNG chống trùng
-            // để nhiều chap oneshot vẫn thêm được
-
             stories.push({
                 name,
-                url: link.href // vẫn mở đúng chap
+                url: link.href
             });
 
             added++;
@@ -292,7 +330,9 @@
         }
 
         const resultBox =
-            document.getElementById("resultBox");
+            document.getElementById(
+                "resultBox"
+            );
 
         resultBox.innerHTML =
             "🎰 Đang random...";
@@ -304,7 +344,8 @@
             const random =
                 stories[
                     Math.floor(
-                        Math.random() * stories.length
+                        Math.random() *
+                        stories.length
                     )
                 ];
 
@@ -326,7 +367,8 @@
                 const final =
                     stories[
                         Math.floor(
-                            Math.random() * stories.length
+                            Math.random() *
+                            stories.length
                         )
                     ];
 
