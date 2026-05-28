@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      4.0
 // @description  Random truyện vi-hentai
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -12,13 +12,19 @@
     'use strict';
 
     const STORAGE_KEY = "vih_random_stories";
-    let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+
+    let stories =
+        JSON.parse(
+            localStorage.getItem(STORAGE_KEY) || "[]"
+        );
 
     // =========================
     // FLOAT BUTTON
     // =========================
     const btn = document.createElement("div");
+
     btn.innerHTML = "🎰";
+
     btn.style.cssText = `
         position:fixed;
         right:20px;
@@ -35,43 +41,69 @@
         z-index:999999;
         box-shadow:0 0 20px #7f5af0;
         user-select:none;
+        touch-action:none;
     `;
+
     document.body.appendChild(btn);
 
     // =========================
-    // DRAG BUTTON
+    // DRAG
     // =========================
-    let isDragging = false;
-    let offsetX, offsetY;
+    let dragging = false;
+    let moved = false;
 
-    btn.addEventListener("touchstart", startDrag);
-    btn.addEventListener("mousedown", startDrag);
+    let offsetX = 0;
+    let offsetY = 0;
 
     function startDrag(e) {
-        isDragging = true;
 
-        const touch = e.touches ? e.touches[0] : e;
+        dragging = true;
+        moved = false;
 
-        offsetX = touch.clientX - btn.offsetLeft;
-        offsetY = touch.clientY - btn.offsetTop;
+        const touch =
+            e.touches ? e.touches[0] : e;
+
+        offsetX =
+            touch.clientX - btn.offsetLeft;
+
+        offsetY =
+            touch.clientY - btn.offsetTop;
     }
 
-    document.addEventListener("touchmove", drag);
-    document.addEventListener("mousemove", drag);
+    function moveDrag(e) {
 
-    function drag(e) {
-        if (!isDragging) return;
+        if (!dragging) return;
 
-        const touch = e.touches ? e.touches[0] : e;
+        moved = true;
 
-        btn.style.left = `${touch.clientX - offsetX}px`;
-        btn.style.top = `${touch.clientY - offsetY}px`;
+        const touch =
+            e.touches ? e.touches[0] : e;
+
+        btn.style.left =
+            `${touch.clientX - offsetX}px`;
+
+        btn.style.top =
+            `${touch.clientY - offsetY}px`;
+
         btn.style.right = "auto";
         btn.style.bottom = "auto";
     }
 
-    document.addEventListener("touchend", () => isDragging = false);
-    document.addEventListener("mouseup", () => isDragging = false);
+    function endDrag() {
+
+        setTimeout(() => {
+            dragging = false;
+        }, 50);
+    }
+
+    btn.addEventListener("mousedown", startDrag);
+    btn.addEventListener("touchstart", startDrag);
+
+    document.addEventListener("mousemove", moveDrag);
+    document.addEventListener("touchmove", moveDrag);
+
+    document.addEventListener("mouseup", endDrag);
+    document.addEventListener("touchend", endDrag);
 
     // =========================
     // PANEL
@@ -84,7 +116,7 @@
         left:50%;
         transform:translate(-50%,-50%);
         width:90%;
-        max-width:400px;
+        max-width:420px;
         max-height:80vh;
         overflow:auto;
         background:#111;
@@ -99,9 +131,19 @@
     `;
 
     panel.innerHTML = `
-        <h2 style="text-align:center;">🎲 Random Truyện</h2>
+        <h2 style="
+            text-align:center;
+            margin-bottom:15px;
+        ">
+            🎲 Random Truyện
+        </h2>
 
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
+        <div style="
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            margin-bottom:15px;
+        ">
             <button id="getStories">📚 Lấy truyện</button>
             <button id="randomStory">🎰 Random</button>
             <button id="clearStories">🗑 Xoá</button>
@@ -114,17 +156,21 @@
                 border-radius:12px;
                 margin-bottom:15px;
                 text-align:center;
-                min-height:60px;
+                min-height:70px;
                 display:flex;
                 align-items:center;
                 justify-content:center;
-                font-size:18px;
                 border:1px solid #333;
-            ">
+            "
+        >
             Chưa random
         </div>
 
-        <div style="margin-bottom:10px;">
+        <div style="
+            margin-bottom:10px;
+            font-size:14px;
+            color:#aaa;
+        ">
             Tổng truyện:
             <span id="storyCount">0</span>
         </div>
@@ -135,7 +181,7 @@
     document.body.appendChild(panel);
 
     // =========================
-    // BUTTON STYLE
+    // STYLE
     // =========================
     const style = document.createElement("style");
 
@@ -148,18 +194,20 @@
             border:none;
             color:white;
             padding:10px;
-            border-radius:10px;
+            border-radius:12px;
             font-size:14px;
             cursor:pointer;
+            font-weight:bold;
         }
 
         .storyItem{
             background:#1a1a1a;
             padding:10px;
-            border-radius:10px;
+            border-radius:12px;
             margin-bottom:8px;
             border:1px solid #333;
             word-break:break-word;
+            font-size:14px;
         }
 
         .storyItem a{
@@ -174,7 +222,8 @@
     // TOGGLE PANEL
     // =========================
     btn.addEventListener("click", () => {
-        if (isDragging) return;
+
+        if (moved) return;
 
         panel.style.display =
             panel.style.display === "none"
@@ -188,28 +237,37 @@
     // GET STORIES
     // =========================
     document.getElementById("getStories")
-        .addEventListener("click", () => {
+    .addEventListener("click", () => {
 
-        const links = document.querySelectorAll('a[href*="/truyen/"]');
+        const links =
+            document.querySelectorAll(
+                'a[href*="/truyen/"]'
+            );
 
         let added = 0;
 
         links.forEach(link => {
 
-            const name = link.textContent.trim();
+            // chỉ lấy tên truyện
+            let name =
+                link.querySelector("img")?.alt ||
+                link.querySelector("h3")?.innerText ||
+                "";
 
-            if (
-                name &&
-                name.length > 2 &&
-                !stories.some(s => s.name === name)
-            ) {
-                stories.push({
-                    name,
-                    url: link.href
-                });
+            name = name.trim();
 
-                added++;
-            }
+            if (!name || name.length < 2)
+                return;
+
+            // KHÔNG chống trùng
+            // để nhiều chap oneshot vẫn thêm được
+
+            stories.push({
+                name,
+                url: link.href // vẫn mở đúng chap
+            });
+
+            added++;
         });
 
         localStorage.setItem(
@@ -226,7 +284,7 @@
     // RANDOM
     // =========================
     document.getElementById("randomStory")
-        .addEventListener("click", () => {
+    .addEventListener("click", () => {
 
         if (stories.length === 0) {
             alert("Chưa có truyện");
@@ -236,7 +294,8 @@
         const resultBox =
             document.getElementById("resultBox");
 
-        resultBox.innerHTML = "🎰 Đang random...";
+        resultBox.innerHTML =
+            "🎰 Đang random...";
 
         let count = 0;
 
@@ -244,11 +303,19 @@
 
             const random =
                 stories[
-                    Math.floor(Math.random() * stories.length)
+                    Math.floor(
+                        Math.random() * stories.length
+                    )
                 ];
 
-            resultBox.innerHTML =
-                `<div>${random.name}</div>`;
+            resultBox.innerHTML = `
+                <div style="
+                    font-size:18px;
+                    color:#2cb67d;
+                ">
+                    ${random.name}
+                </div>
+            `;
 
             count++;
 
@@ -258,7 +325,9 @@
 
                 const final =
                     stories[
-                        Math.floor(Math.random() * stories.length)
+                        Math.floor(
+                            Math.random() * stories.length
+                        )
                     ];
 
                 resultBox.innerHTML = `
@@ -267,6 +336,7 @@
                             font-size:22px;
                             color:#2cb67d;
                             margin-bottom:10px;
+                            font-weight:bold;
                         ">
                             🎉 ${final.name}
                         </div>
@@ -280,7 +350,7 @@
                                 font-size:16px;
                             "
                         >
-                            📖 Mở truyện
+                            📖 Mở chap truyện
                         </a>
                     </div>
                 `;
@@ -293,13 +363,16 @@
     // CLEAR
     // =========================
     document.getElementById("clearStories")
-        .addEventListener("click", () => {
+    .addEventListener("click", () => {
 
-        if (!confirm("Xoá toàn bộ?")) return;
+        if (!confirm("Xoá toàn bộ?"))
+            return;
 
         stories = [];
 
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(
+            STORAGE_KEY
+        );
 
         renderStories();
     });
@@ -310,23 +383,36 @@
     function renderStories() {
 
         const list =
-            document.getElementById("storyList");
+            document.getElementById(
+                "storyList"
+            );
 
-        document.getElementById("storyCount")
-            .innerText = stories.length;
+        document.getElementById(
+            "storyCount"
+        ).innerText = stories.length;
 
         if (stories.length === 0) {
-            list.innerHTML =
-                "<div>Chưa có truyện</div>";
+
+            list.innerHTML = `
+                <div style="
+                    color:#777;
+                    text-align:center;
+                    padding:10px;
+                ">
+                    Chưa có truyện
+                </div>
+            `;
+
             return;
         }
 
-        list.innerHTML = stories.map((s, i) => `
-            <div class="storyItem">
-                <b>${i + 1}.</b>
-                ${s.name}
-            </div>
-        `).join("");
+        list.innerHTML =
+            stories.map((s, i) => `
+                <div class="storyItem">
+                    <b>${i + 1}.</b>
+                    ${s.name}
+                </div>
+            `).join("");
     }
 
 })();
