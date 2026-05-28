@@ -11,9 +11,6 @@
 (function () {
     'use strict';
 
-    // =========================
-    // STORAGE
-    // =========================
     const STORAGE_KEY = "vih_random_stories";
 
     let stories =
@@ -242,38 +239,58 @@
     document.getElementById("getStories")
     .addEventListener("click", () => {
 
-        const cards =
+        const links =
             document.querySelectorAll(
-                "a[href*='/truyen/']"
+                'a[href*="/truyen/"]'
             );
 
         let added = 0;
 
-        cards.forEach(card => {
+        links.forEach(link => {
 
-            // lấy tên thật
-            let title =
-                card.querySelector("h3")?.innerText ||
-                card.querySelector(".font-semibold")?.innerText ||
-                card.querySelector("img")?.alt ||
-                "";
+            let raw =
+                link.textContent
+                    .replace(/\s+/g, " ")
+                    .trim();
 
-            title = title.trim();
+            if (!raw || raw.length < 2)
+                return;
 
-            // lọc rác
+            let name = raw;
+
+            // ghép chap + tên truyện
+            if (/chap/i.test(raw)) {
+
+                const chapMatch =
+                    raw.match(
+                        /chap\s*\d+[^]*/i
+                    );
+
+                const chap =
+                    chapMatch
+                        ? chapMatch[0].trim()
+                        : "Chap ?";
+
+                const story =
+                    raw.replace(
+                        chapMatch?.[0] || "",
+                        ""
+                    ).trim();
+
+                name =
+                    `[${chap}] ${story}`;
+            }
+
+            // chống trùng
             if (
-                !title ||
-                title.length < 2 ||
-                title.toLowerCase().includes("chap") ||
-                title.toLowerCase().includes("oneshot") ||
                 stories.some(
-                    s => s.name === title
+                    s => s.name === name
                 )
             ) return;
 
             stories.push({
-                name: title,
-                url: card.href
+                name,
+                url: link.href
             });
 
             added++;
@@ -379,7 +396,9 @@
 
         stories = [];
 
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(
+            STORAGE_KEY
+        );
 
         renderStories();
     });
@@ -390,10 +409,13 @@
     function renderStories() {
 
         const list =
-            document.getElementById("storyList");
+            document.getElementById(
+                "storyList"
+            );
 
-        document.getElementById("storyCount")
-        .innerText = stories.length;
+        document.getElementById(
+            "storyCount"
+        ).innerText = stories.length;
 
         if (stories.length === 0) {
 
@@ -419,4 +441,4 @@
             `).join("");
     }
 
-                  })();
+})();
