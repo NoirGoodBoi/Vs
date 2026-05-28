@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      6.0
 // @description  Random truyện vi-hentai
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -239,70 +239,42 @@
     document.getElementById("getStories")
     .addEventListener("click", () => {
 
-        const links =
+        const cards =
             document.querySelectorAll(
                 'a[href*="/truyen/"]'
             );
 
         let added = 0;
 
-        links.forEach(link => {
+        cards.forEach(card => {
 
             let name = "";
 
-            // ưu tiên alt ảnh
+            // CHỈ lấy từ alt/title ảnh
             const img =
-                link.querySelector("img");
+                card.querySelector("img");
 
-            if (img?.alt) {
-                name = img.alt.trim();
+            if (img) {
+
+                name =
+                    img.getAttribute("alt") ||
+                    img.getAttribute("title") ||
+                    "";
             }
 
-            // fallback h3
-            if (!name) {
-
-                const h3 =
-                    link.querySelector("h3");
-
-                if (h3) {
-                    name =
-                        h3.innerText.trim();
-                }
-            }
-
-            // fallback text khác
-            if (!name) {
-
-                const elements =
-                    link.querySelectorAll(
-                        "span, div"
-                    );
-
-                elements.forEach(el => {
-
-                    const text =
-                        el.innerText?.trim();
-
-                    if (
-                        text &&
-                        text.length > 2 &&
-                        text.length < 120 &&
-                        !text.toLowerCase()
-                            .includes("chap")
-                    ) {
-                        name = text;
-                    }
-                });
-            }
+            // nếu không có tên thì bỏ
+            if (!name) return;
 
             name = name.trim();
 
-            if (!name || name.length < 2)
-                return;
+            // lọc chap
+            if (
+                name.toLowerCase().includes("chap")
+            ) return;
 
             stories.push({
                 name,
-                url: link.href
+                url: card.href
             });
 
             added++;
