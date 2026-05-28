@@ -116,7 +116,7 @@
         left:50%;
         transform:translate(-50%,-50%);
         width:90%;
-        max-width:300px;
+        max-width:200px;
         max-height:80vh;
         overflow:auto;
         background:#111;
