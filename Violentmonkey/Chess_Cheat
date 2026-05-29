@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess Noir
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
 // @author       Noir
 // @match        *://www.chess.com/*
@@ -38,13 +38,13 @@
     let lastRenderedFenForArrows = "";
     let lastObservedBoardFenPart = "";
     let latestLiveFen = "";
-    let latestLiveFenSource = "none";
-    let latestLiveFenTimestamp = 0;
     let pendingAnalyzeTimeout = null;
     let scheduledFenForAnalyze = "";
+    let analyzeTimeoutId = null;
+    let activeAnalyzeToken = 0;
     const START_POSITION_BOARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
-    // --- STYLES (Màu tím thay vì xanh) ---
+    // --- STYLES (Màu tím) ---
     GM_addStyle(`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
 
@@ -104,10 +104,13 @@
             padding: 14px 16px;
             background: linear-gradient(128deg, rgba(139, 92, 246, 0.35), rgba(217, 70, 239, 0.3));
             border-bottom: 1px solid rgba(255,255,255,0.08);
-            cursor: move;
+            cursor: grab;
             display: flex;
             align-items: center;
             justify-content: space-between;
+        }
+        #noir-gui-header:active {
+            cursor: grabbing;
         }
         #noir-gui-header .title {
             display: flex;
@@ -116,6 +119,7 @@
             font-weight: 800;
             font-size: 13px;
             letter-spacing: 0.7px;
+            pointer-events: none;
         }
         #noir-gui-header .title span {
             text-transform: uppercase;
@@ -144,6 +148,7 @@
             font-size: 18px;
             font-weight: 700;
             transition: transform 0.25s ease, background 0.25s ease;
+            z-index: 10;
         }
         #noir-toggle-btn:hover {
             transform: rotate(7deg) scale(1.06);
@@ -331,10 +336,6 @@
             color: white;
             box-shadow: 0 11px 24px rgba(232, 88, 95, 0.24);
         }
-        .noir-btn-success {
-            background: linear-gradient(130deg, #22c55e, #14b8a6);
-            color: white;
-        }
         .noir-btn.scanning {
             animation: noir-scan-beat 0.92s ease infinite;
             box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.44);
@@ -391,7 +392,7 @@
             width: 100%;
             height: 100%;
             pointer-events: none;
-            z-index: 1000 !important;
+            z-index: 10000 !important;
         }
         .best-move-arrow {
             stroke-dasharray: 1000;
@@ -519,7 +520,56 @@
         }
     `);
 
-    // --- GUI (đã đổi tên) ---
+    // --- DRAG FUNCTION (Cải thiện) ---
+    function dragElement(elmnt) {
+        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        const header = document.getElementById('noir-gui-header');
+        if (!header) return;
+        
+        header.style.cursor = 'grab';
+        
+        const dragMouseDown = (e) => {
+            // Chỉ drag khi click vào header, không phải các nút bên trong
+            if (e.target.closest('#noir-toggle-btn')) return;
+            if (e.target.closest('.noir-tab')) return;
+            if (e.target.closest('button')) return;
+            if (e.target.closest('.noir-btn')) return;
+            
+            e.preventDefault();
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            header.style.cursor = 'grabbing';
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+        };
+        
+        const elementDrag = (e) => {
+            e.preventDefault();
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            let newTop = elmnt.offsetTop - pos2;
+            let newLeft = elmnt.offsetLeft - pos1;
+            // Giới hạn trong viewport
+            newTop = Math.max(0, Math.min(newTop, window.innerHeight - 100));
+            newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - 200));
+            elmnt.style.top = newTop + "px";
+            elmnt.style.left = newLeft + "px";
+            elmnt.style.bottom = "auto";
+            elmnt.style.right = "auto";
+        };
+        
+        const closeDragElement = () => {
+            document.onmouseup = null;
+            document.onmousemove = null;
+            header.style.cursor = 'grab';
+        };
+        
+        header.onmousedown = dragMouseDown;
+    }
+
+    // --- GUI ---
     function createGUI() {
         if (document.getElementById('noir-gui')) return;
         const gui = document.createElement('div');
@@ -537,7 +587,6 @@
                 <div class="noir-tab" data-tab="settings">⚙️ Cài đặt</div>
             </div>
             <div id="noir-gui-body">
-                <!-- Tab Chính -->
                 <div class="noir-tab-content active" id="tab-main">
                     <div class="noir-card">
                         <div class="noir-card-label">Trạng thái</div>
@@ -558,8 +607,6 @@
                     </div>
                     <button id="force-analyze" class="noir-btn noir-btn-primary">🔎 Scan</button>
                 </div>
-                
-                <!-- Tab Cài đặt -->
                 <div class="noir-tab-content" id="tab-settings">
                     <div class="noir-setting">
                         <span class="noir-setting-label">Bật script</span>
@@ -579,7 +626,6 @@
         `;
         document.body.appendChild(gui);
         
-        // Toggle collapse
         document.getElementById('noir-toggle-btn').onclick = () => {
             guiCollapsed = !guiCollapsed;
             gui.classList.toggle('collapsed', guiCollapsed);
@@ -588,7 +634,6 @@
             document.getElementById('noir-toggle-btn').innerText = guiCollapsed ? '+' : '−';
         };
         
-        // Tabs
         document.querySelectorAll('.noir-tab').forEach(tab => {
             tab.onclick = () => {
                 document.querySelectorAll('.noir-tab').forEach(t => t.classList.remove('active'));
@@ -599,7 +644,6 @@
             };
         });
         
-        // Toggle script
         document.getElementById('toggle-script').onclick = function() {
             isScriptEnabled = !isScriptEnabled;
             this.classList.toggle('on', isScriptEnabled);
@@ -611,25 +655,21 @@
             }
         };
         
-        // Toggle arrows
         document.getElementById('toggle-arrows').onclick = function() {
             showArrows = !showArrows;
             this.classList.toggle('on', showArrows);
             if (!showArrows) clearArrows();
         };
         
-        // Toggle auto
         document.getElementById('toggle-auto').onclick = function() {
             autoAnalyze = !autoAnalyze;
             this.classList.toggle('on', autoAnalyze);
         };
         
-        // Force analyze
         document.getElementById('force-analyze').onclick = () => {
             resetAnalysis();
         };
         
-        // Reset all
         document.getElementById('reset-all').onclick = () => {
             resetRuntimeState("reset-all-button");
             updateStatus("✅ Sẵn sàng");
@@ -639,34 +679,24 @@
             document.getElementById('best-move-meta').classList.remove('promotion-meta');
             document.getElementById('player-color-display').innerText = "Đang phát hiện...";
             document.getElementById('turn-display').innerText = "-";
+            lastBestMove = "";
+            clearArrows();
         };
         
         dragElement(gui);
     }
 
-    function dragElement(elmnt) {
-        let p1=0, p2=0, p3=0, p4=0;
-        elmnt.onmousedown = (e) => {
-            if (e.target.id === 'noir-toggle-btn' || e.target.closest('.noir-tab') || e.target.closest('button') || e.target.closest('a')) return;
-            p3 = e.clientX; p4 = e.clientY;
-            document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
-            document.onmousemove = (e) => {
-                p1 = p3 - e.clientX; p2 = p4 - e.clientY;
-                p3 = e.clientX; p4 = e.clientY;
-                elmnt.style.top = (elmnt.offsetTop - p2) + "px";
-                elmnt.style.left = (elmnt.offsetLeft - p1) + "px";
-            };
-        };
-    }
-
     // --- ENGINE ---
     function initEngine(useFallback = false) {
         const url = useFallback ? FALLBACK_URL : STOCKFISH_URL;
-        updateStatus("⏳ Đang tải...");
+        updateStatus("⏳ Đang tải Engine...");
         GM_xmlhttpRequest({
             method: "GET", url: url,
             onload: (res) => {
-                if (res.status !== 200) { if(!useFallback) initEngine(true); return; }
+                if (res.status !== 200) { 
+                    if(!useFallback) initEngine(true); 
+                    return; 
+                }
                 let code = res.responseText;
                 code = code.replace(/import\.meta\.url/g, `"${url}"`);
                 code = code.replace(/var\s+scriptDirectory\s*=\s*['"](.*?)['"]/g, `var scriptDirectory = "${url.substring(0, url.lastIndexOf('/') + 1)}"`);
@@ -711,7 +741,7 @@
         if(el) el.innerText = t;
     }
 
-    // --- Các hàm xử lý FEN, bàn cờ, phân tích... (giữ nguyên logic) ---
+    // --- UTILITY FUNCTIONS ---
     function getFenBoardPart(fen) {
         if (!fen || typeof fen !== 'string') return "";
         return (fen.trim().split(/\s+/)[0] || "");
@@ -759,6 +789,10 @@
         scheduledFenForAnalyze = "";
         playerColor = null;
         lastPlayerColorSource = "unknown";
+        if (analyzeTimeoutId) {
+            clearTimeout(analyzeTimeoutId);
+            analyzeTimeoutId = null;
+        }
         clearArrows();
     }
 
@@ -839,7 +873,6 @@
             }
             if (fileIdx !== 8) return null;
         }
-
         return {
             board: board,
             sideToMove: parts[1] === 'b' ? 'b' : 'w'
@@ -856,9 +889,9 @@
         if (!parsed) return false;
 
         const sourcePiece = parsed.board[from] || null;
-        const targetPiece = parsed.board[to] || null;
         if (!sourcePiece) return false;
 
+        const targetPiece = parsed.board[to] || null;
         const activeTurn = (expectedTurn === 'w' || expectedTurn === 'b') ? expectedTurn : parsed.sideToMove;
         if (sourcePiece.color !== activeTurn) return false;
         if (targetPiece && sourcePiece.color === targetPiece.color) return false;
@@ -880,63 +913,17 @@
         if (!turnEl) return;
         if (currentTurn === 'w') {
             turnEl.innerText = "⬜ Trắng đi";
-            turnEl.className = "noir-card-value";
             turnEl.style.color = "#fff";
-            return;
-        }
-        if (currentTurn === 'b') {
+        } else if (currentTurn === 'b') {
             turnEl.innerText = "⬛ Đen đi";
-            turnEl.className = "noir-card-value";
             turnEl.style.color = "#888";
-            return;
+        } else {
+            turnEl.innerText = "-";
+            turnEl.style.color = "#c084fc";
         }
-        turnEl.innerText = "-";
-        turnEl.className = "noir-card-value";
-        turnEl.style.color = "#c084fc";
     }
 
-    function detectPlayerColor() {
-        const board = getActiveBoardElement();
-        if (!board) return playerColor;
-
-        const orientation = (board.getAttribute('orientation') || "").toLowerCase();
-        if (orientation === "black") return "b";
-        if (orientation === "white") return "w";
-
-        if (board.classList.contains('flipped')) return "b";
-
-        if (board.dataset.orientation === "black") return "b";
-        if (board.dataset.orientation === "white") return "w";
-
-        if (document.querySelector('.board-layout-player-bottom.black')) return "b";
-        if (document.querySelector('.board-layout-player-bottom.white')) return "w";
-
-        try {
-            if (unsafeWindow.game && typeof unsafeWindow.game.getOurColor === 'function') {
-                const color = unsafeWindow.game.getOurColor();
-                if (color === 'w' || color === 'b') return color;
-            }
-        } catch (e) {}
-
-        const pieces = board.querySelectorAll('.piece');
-        let bottomRowColor = null;
-        pieces.forEach(p => {
-            const squareMatch = p.className.match(/square-(\d)(\d)/);
-            if (squareMatch) {
-                const row = parseInt(squareMatch[2]);
-                const pieceMatch = p.className.match(/piece ([wb])/);
-                if (pieceMatch) {
-                    if (row === 1 && !bottomRowColor) bottomRowColor = pieceMatch[1];
-                }
-            }
-        });
-        
-        if (bottomRowColor === 'w') return 'w';
-        if (bottomRowColor === 'b') return 'b';
-
-        return playerColor;
-    }
-
+    // --- BOARD & FEN DETECTION ---
     function getActiveBoardElement() {
         const boards = Array.from(document.querySelectorAll('chess-board, wc-chess-board'));
         if (!boards.length) return null;
@@ -984,25 +971,6 @@
         if (!sourcePiece) return true;
         if (targetPiece && sourcePiece.color === targetPiece.color) return true;
         return false;
-    }
-
-    function getCurrentFenFromBoard() {
-        const board = getActiveBoardElement();
-        if (!board) return null;
-        
-        const attrFen = board.getAttribute('data-fen') || board.getAttribute('fen');
-        if (attrFen) {
-            const normalized = normalizeFen(attrFen);
-            if (normalized) return normalized;
-        }
-        
-        const boardPart = buildBoardPartFromDom(board);
-        if (boardPart) {
-            const turn = detectTurnFromLiveUiFallback();
-            return normalizeFen(`${boardPart} ${turn} - - 0 1`);
-        }
-        
-        return null;
     }
 
     function buildBoardPartFromDom(board) {
@@ -1076,45 +1044,298 @@
         return getCurrentTurnFromFen(lastFen) || 'w';
     }
 
+    function getCurrentFenFromBoard() {
+        const board = getActiveBoardElement();
+        if (!board) return null;
+        
+        const attrFen = board.getAttribute('data-fen') || board.getAttribute('fen');
+        if (attrFen) {
+            const normalized = normalizeFen(attrFen);
+            if (normalized) return normalized;
+        }
+        
+        const boardPart = buildBoardPartFromDom(board);
+        if (boardPart) {
+            const turn = detectTurnFromLiveUiFallback();
+            return normalizeFen(`${boardPart} ${turn} - - 0 1`);
+        }
+        
+        return null;
+    }
+
+    function detectPlayerColor() {
+        const board = getActiveBoardElement();
+        if (!board) return playerColor;
+
+        const orientation = (board.getAttribute('orientation') || "").toLowerCase();
+        if (orientation === "black") return "b";
+        if (orientation === "white") return "w";
+
+        if (board.classList.contains('flipped')) return "b";
+
+        if (board.dataset.orientation === "black") return "b";
+        if (board.dataset.orientation === "white") return "w";
+
+        if (document.querySelector('.board-layout-player-bottom.black')) return "b";
+        if (document.querySelector('.board-layout-player-bottom.white')) return "w";
+
+        try {
+            if (unsafeWindow.game && typeof unsafeWindow.game.getOurColor === 'function') {
+                const color = unsafeWindow.game.getOurColor();
+                if (color === 'w' || color === 'b') return color;
+            }
+        } catch (e) {}
+
+        const pieces = board.querySelectorAll('.piece');
+        let bottomRowColor = null;
+        pieces.forEach(p => {
+            const squareMatch = p.className.match(/square-(\d)(\d)/);
+            if (squareMatch) {
+                const row = parseInt(squareMatch[2]);
+                const pieceMatch = p.className.match(/piece ([wb])/);
+                if (pieceMatch) {
+                    if (row === 1 && !bottomRowColor) bottomRowColor = pieceMatch[1];
+                }
+            }
+        });
+        
+        if (bottomRowColor === 'w') return 'w';
+        if (bottomRowColor === 'b') return 'b';
+
+        return playerColor;
+    }
+
+    // --- COORDINATE CONVERSION ---
+    function squareToCoords(s, b) {
+        const f = s.charCodeAt(0)-97, r = parseInt(s[1])-1;
+        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
+        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        let x = isFlipped ? (7-f) : f, y = isFlipped ? r : (7-r);
+        return { x: x*100+50, y: y*100+50 };
+    }
+
+    function squareToPercent(s, b) {
+        if (!s || s.length < 2) return null;
+        const f = s.charCodeAt(0)-97;
+        const r = parseInt(s[1], 10)-1;
+        if (f < 0 || f > 7 || Number.isNaN(r) || r < 0 || r > 7) return null;
+        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
+        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        const x = isFlipped ? (7-f) : f;
+        const y = isFlipped ? r : (7-r);
+        return {
+            leftPercent: x * 12.5,
+            topPercent: y * 12.5
+        };
+    }
+
+    // --- ARROW DRAWING (Cải thiện) ---
+    function drawMoveArrows(primaryMove, secondaryMove, options = {}) {
+        if (!showArrows) return;
+        
+        const oldLayer = document.getElementById('noir-arrow-layer');
+        if (oldLayer) oldLayer.remove();
+        
+        const board = getActiveBoardElement();
+        if (!board) {
+            console.warn('No board element found for arrows');
+            return;
+        }
+        
+        // Đợi board render xong
+        setTimeout(() => {
+            const freshBoard = getActiveBoardElement();
+            if (!freshBoard) return;
+            
+            if (!primaryMove && !secondaryMove) return;
+            
+            // Kiểm tra tọa độ có hợp lệ không
+            const testMove = primaryMove || secondaryMove;
+            if (testMove && testMove.length >= 4) {
+                const from = testMove.substring(0,2);
+                const to = testMove.substring(2,4);
+                const fC = squareToCoords(from, freshBoard);
+                const tC = squareToCoords(to, freshBoard);
+                if (!fC || !tC) {
+                    console.warn('Invalid coordinates for move:', testMove);
+                    return;
+                }
+            }
+            
+            const layer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            layer.id = "noir-arrow-layer";
+            layer.setAttribute("viewBox", "0 0 800 800");
+            layer.style.position = 'absolute';
+            layer.style.top = '0';
+            layer.style.left = '0';
+            layer.style.width = '100%';
+            layer.style.height = '100%';
+            layer.style.pointerEvents = 'none';
+            layer.style.zIndex = '10000';
+            
+            layer.innerHTML = `<defs>
+                <marker id="noir-arrowhead-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                    <path d="M0,0 L0,8 L8,4 Z" fill="rgba(168,85,247,0.95)"/>
+                </marker>
+                <marker id="noir-arrowhead-red" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                    <path d="M0,0 L0,8 L8,4 Z" fill="rgba(248,113,113,0.95)"/>
+                </marker>
+            </defs>`;
+            
+            const appendArrow = (move, color, markerId, width, isPromotionArrow = false) => {
+                if (!move || move.length < 4) return;
+                const from = move.substring(0,2);
+                const to = move.substring(2,4);
+                if (isSelfCaptureMove(move, freshBoard)) return;
+                const fC = squareToCoords(from, freshBoard);
+                const tC = squareToCoords(to, freshBoard);
+                if (!fC || !tC) return;
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                line.setAttribute("class", "best-move-arrow");
+                line.setAttribute("x1", String(fC.x));
+                line.setAttribute("y1", String(fC.y));
+                line.setAttribute("x2", String(tC.x));
+                line.setAttribute("y2", String(tC.y));
+                line.setAttribute("stroke", color);
+                line.setAttribute("stroke-width", String(width));
+                line.setAttribute("stroke-linecap", "round");
+                line.setAttribute("stroke-dasharray", "1000");
+                line.setAttribute("stroke-dashoffset", "1000");
+                line.setAttribute("marker-end", `url(#${markerId})`);
+                if (isPromotionArrow) {
+                    line.classList.add("promo-neon");
+                }
+                layer.appendChild(line);
+                // Force reflow để animation chạy
+                void line.offsetHeight;
+                line.style.strokeDashoffset = "0";
+            };
+            
+            appendArrow(secondaryMove, "rgba(248,113,113,0.85)", "noir-arrowhead-red", 10);
+            appendArrow(primaryMove, "rgba(168,85,247,0.95)", "noir-arrowhead-green", 14, !!options.primaryPromotion);
+            
+            // Đảm bảo board có position relative để SVG định vị chính xác
+            if (getComputedStyle(freshBoard).position === 'static') {
+                freshBoard.style.position = 'relative';
+            }
+            
+            freshBoard.appendChild(layer);
+            
+            if (options.primaryPromotion && primaryMove && primaryMove.length >= 4) {
+                showPromotionSquareEffect(freshBoard, primaryMove.substring(2, 4));
+            }
+        }, 50);
+    }
+
+    function showPromotionSquareEffect(board, square) {
+        const target = squareToPercent(square, board);
+        if (!target) return;
+        const burst = document.createElement('div');
+        burst.className = 'noir-promotion-burst';
+        burst.style.left = `${target.leftPercent}%`;
+        burst.style.top = `${target.topPercent}%`;
+
+        const ring = document.createElement('div');
+        ring.className = 'noir-promotion-ring';
+        ring.style.left = `${target.leftPercent}%`;
+        ring.style.top = `${target.topPercent}%`;
+
+        board.appendChild(ring);
+        board.appendChild(burst);
+
+        const cx = target.leftPercent + 6.25;
+        const cy = target.topPercent + 6.25;
+        for (let i = 0; i < 8; i += 1) {
+            const particle = document.createElement('div');
+            const angle = (Math.PI * 2 * i) / 8;
+            const distance = 12 + (i % 3) * 4;
+            particle.className = 'noir-promotion-particle';
+            particle.style.left = `${cx}%`;
+            particle.style.top = `${cy}%`;
+            particle.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
+            particle.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
+            board.appendChild(particle);
+            setTimeout(() => particle.remove(), 650);
+        }
+
+        setTimeout(() => {
+            burst.remove();
+            ring.remove();
+        }, 700);
+    }
+
+    // --- ANALYSIS ---
     function resetAnalysis() {
         resetRuntimeState("manual-scan");
-        lastAnalyzedFen = "";
+        if (analyzeTimeoutId) {
+            clearTimeout(analyzeTimeoutId);
+            analyzeTimeoutId = null;
+        }
+        activeAnalyzeToken += 1;
+        updateStatus("🔎 Đang quét...");
+        const btn = document.getElementById('force-analyze');
+        if (btn) btn.classList.add('scanning');
         const fen = normalizeFen(getCurrentFenFromBoard());
         if (fen) {
             analyzeCurrentPosition();
         } else {
+            if (btn) btn.classList.remove('scanning');
             updateStatus("❌ Không đọc được bàn cờ");
         }
     }
 
     function analyzeCurrentPosition() {
         if (!engine || !isScriptEnabled) return;
+        
         const fen = normalizeFen(getCurrentFenFromBoard());
         if (!fen) {
             updateStatus("❌ Lỗi bàn cờ!");
+            const btn = document.getElementById('force-analyze');
+            if (btn) btn.classList.remove('scanning');
             return;
         }
+        
         if (fen === lastFen) {
             updateStatus("✅ Đã quét xong");
+            const btn = document.getElementById('force-analyze');
+            if (btn) btn.classList.remove('scanning');
             return;
         }
         
         playerColor = detectPlayerColor();
         const currentTurn = getCurrentTurnFromFen(fen);
         if (!currentTurn) {
-            updateStatus("⚠️ Không đọc được lượt đi từ FEN");
+            updateStatus("⚠️ Không đọc được lượt đi");
+            const btn = document.getElementById('force-analyze');
+            if (btn) btn.classList.remove('scanning');
             return;
         }
         
         lastFen = fen;
         lastAnalyzedTurn = currentTurn;
-        updateStatus("🧠 Đang tính...");
+        updateStatus("🧠 Đang tính toán...");
+        
         engine.postMessage('stop');
         engine.postMessage(`position fen ${fen}`);
-        engine.postMessage(`go movetime 200 depth 18`);
+        engine.postMessage(`go movetime 300 depth 20`);
+        
+        if (analyzeTimeoutId) clearTimeout(analyzeTimeoutId);
+        analyzeTimeoutId = setTimeout(() => {
+            analyzeTimeoutId = null;
+            updateStatus("⚠️ Quét timeout, thử lại");
+            const btn = document.getElementById('force-analyze');
+            if (btn) btn.classList.remove('scanning');
+        }, 10000);
     }
 
     function handleBestMove(m) {
+        if (analyzeTimeoutId) {
+            clearTimeout(analyzeTimeoutId);
+            analyzeTimeoutId = null;
+        }
+        const btn = document.getElementById('force-analyze');
+        if (btn) btn.classList.remove('scanning');
+        
         if(!m || m==="(none)" || !isScriptEnabled) {
             updateStatus("⚠️ Không có nước đi hợp lệ");
             return;
@@ -1173,120 +1394,21 @@
 
         updateStatus("✨ Đến lượt bạn!");
         const moveInfo = parsePromotionMove(safeMove);
-        drawMoveArrows(safeMove, null, {
-            primaryPromotion: moveInfo.promotion
-        });
-    }
-
-    function drawMoveArrows(primaryMove, secondaryMove, options = {}) {
-        clearArrows();
-        const board = getActiveBoardElement();
-        if (!board) return;
-
-        if (!primaryMove && !secondaryMove) return;
-
-        const layer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        layer.id = "noir-arrow-layer";
-        layer.setAttribute("viewBox", "0 0 800 800");
-        layer.innerHTML = `<defs>
-            <marker id="noir-arrowhead-green" markerWidth="5" markerHeight="5" refX="3.8" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5 Z" fill="rgba(168,85,247,0.95)"/></marker>
-            <marker id="noir-arrowhead-red" markerWidth="5" markerHeight="5" refX="3.8" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5 Z" fill="rgba(248,113,113,0.95)"/></marker>
-        </defs>`;
-
-        const appendArrow = (move, color, markerId, width, isPromotionArrow = false) => {
-            if (!move || move.length < 4) return;
-            const from = move.substring(0,2);
-            const to = move.substring(2,4);
-            if (isSelfCaptureMove(move, board)) return;
-            const fC = squareToCoords(from, board);
-            const tC = squareToCoords(to, board);
-            if (!fC || !tC) return;
-            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            line.setAttribute("class", "best-move-arrow");
-            line.setAttribute("x1", String(fC.x));
-            line.setAttribute("y1", String(fC.y));
-            line.setAttribute("x2", String(tC.x));
-            line.setAttribute("y2", String(tC.y));
-            line.setAttribute("stroke", color);
-            line.setAttribute("stroke-width", String(width));
-            line.setAttribute("stroke-linecap", "round");
-            line.setAttribute("marker-end", `url(#${markerId})`);
-            if (isPromotionArrow) {
-                line.classList.add("promo-neon");
-            }
-            layer.appendChild(line);
-        };
-
-        appendArrow(secondaryMove, "rgba(248,113,113,0.75)", "noir-arrowhead-red", 10);
-        appendArrow(primaryMove, "rgba(168,85,247,0.85)", "noir-arrowhead-green", 14, !!options.primaryPromotion);
-        board.appendChild(layer);
         
-        if (options.primaryPromotion && primaryMove && primaryMove.length >= 4) {
-            showPromotionSquareEffect(board, primaryMove.substring(2, 4));
-        }
-    }
-
-    function showPromotionSquareEffect(board, square) {
-        const target = squareToPercent(square, board);
-        if (!target) return;
-        const burst = document.createElement('div');
-        burst.className = 'noir-promotion-burst';
-        burst.style.left = `${target.leftPercent}%`;
-        burst.style.top = `${target.topPercent}%`;
-
-        const ring = document.createElement('div');
-        ring.className = 'noir-promotion-ring';
-        ring.style.left = `${target.leftPercent}%`;
-        ring.style.top = `${target.topPercent}%`;
-
-        board.appendChild(ring);
-        board.appendChild(burst);
-
-        const cx = target.leftPercent + 6.25;
-        const cy = target.topPercent + 6.25;
-        for (let i = 0; i < 8; i += 1) {
-            const particle = document.createElement('div');
-            const angle = (Math.PI * 2 * i) / 8;
-            const distance = 12 + (i % 3) * 4;
-            particle.className = 'noir-promotion-particle';
-            particle.style.left = `${cx}%`;
-            particle.style.top = `${cy}%`;
-            particle.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
-            particle.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
-            board.appendChild(particle);
-            setTimeout(() => particle.remove(), 650);
-        }
-
+        // Xóa layer cũ trước khi vẽ mới
+        clearArrows();
+        // Vẽ mũi tên
+        drawMoveArrows(safeMove, null, { primaryPromotion: moveInfo.promotion });
+        
+        // Dự phòng: nếu sau 300ms vẫn chưa có arrow, thử vẽ lại
         setTimeout(() => {
-            burst.remove();
-            ring.remove();
-        }, 700);
+            if (showArrows && !document.getElementById('noir-arrow-layer') && lastBestMove === safeMove) {
+                drawMoveArrows(safeMove, null, { primaryPromotion: moveInfo.promotion });
+            }
+        }, 300);
     }
 
-    function squareToCoords(s, b) {
-        const f = s.charCodeAt(0)-97, r = parseInt(s[1])-1;
-        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
-        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
-        let x = isFlipped ? (7-f) : f, y = isFlipped ? r : (7-r);
-        return { x: x*100+50, y: y*100+50 };
-    }
-
-    function squareToPercent(s, b) {
-        if (!s || s.length < 2) return null;
-        const f = s.charCodeAt(0)-97;
-        const r = parseInt(s[1], 10)-1;
-        if (f < 0 || f > 7 || Number.isNaN(r) || r < 0 || r > 7) return null;
-        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
-        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
-        const x = isFlipped ? (7-f) : f;
-        const y = isFlipped ? r : (7-r);
-        return {
-            leftPercent: x * 12.5,
-            topPercent: y * 12.5
-        };
-    }
-
-    // --- MONITORING ---
+    // --- MAIN LOOP ---
     setInterval(() => {
         const board = getActiveBoardElement();
         const gui = document.getElementById('noir-gui');
@@ -1303,8 +1425,7 @@
                     colorEl.innerText = "⬛ Quân Đen";
                     colorEl.style.color = "#888";
                 }
-            }
-            else {
+            } else {
                 gui.style.display = 'block';
                 if (isScriptEnabled) {
                     const liveFen = normalizeFen(getCurrentFenFromBoard());
@@ -1344,19 +1465,17 @@
                         }
                     }
                     
-                    if (fen && (lastBestMove || (lastPvMoves && lastPvMoves.length)) && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
+                    if (showArrows && fen && (lastBestMove || (lastPvMoves && lastPvMoves.length)) && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
                         const liveTurn = getCurrentTurnFromFen(fen);
-                        if (!liveTurn || liveTurn !== playerColor) {
-                            clearArrows();
-                            hideBestMoveText();
-                            updateStatus("⏳ Đang chờ đối thủ...");
-                            lastRenderedFenForArrows = fen;
-                        } else {
+                        if (liveTurn === playerColor && lastBestMove) {
                             const safeLiveMove = resolveSafeMoveForFen(lastBestMove, fen, liveTurn);
-                            const moveInfo = parsePromotionMove(safeLiveMove);
-                            drawMoveArrows(safeLiveMove, null, {
-                                primaryPromotion: moveInfo.promotion
-                            });
+                            if (safeLiveMove) {
+                                const moveInfo = parsePromotionMove(safeLiveMove);
+                                drawMoveArrows(safeLiveMove, null, { primaryPromotion: moveInfo.promotion });
+                                lastRenderedFenForArrows = fen;
+                            }
+                        } else if (liveTurn !== playerColor) {
+                            clearArrows();
                             lastRenderedFenForArrows = fen;
                         }
                     }
