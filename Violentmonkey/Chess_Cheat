@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess Noir
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
 // @author       Noir
 // @match        *://www.chess.com/*
@@ -42,6 +42,10 @@
     let scheduledFenForAnalyze = "";
     let analyzeTimeoutId = null;
     let activeAnalyzeToken = 0;
+    let pendingArrowMove = null;
+    let arrowDebounceTimer = null;
+    let lastRenderedMove = "";
+    let lastStableDepth = 0;
     const START_POSITION_BOARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
     // --- STYLES (Màu tím) ---
@@ -520,22 +524,32 @@
         }
     `);
 
-    // --- DRAG FUNCTION (Cải thiện) ---
+    // --- DRAG FUNCTION (Tự do + nhớ vị trí) ---
     function dragElement(elmnt) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         const header = document.getElementById('noir-gui-header');
         if (!header) return;
         
+        // Khôi phục vị trí đã lưu
+        const savedTop = localStorage.getItem('noir-gui-top');
+        const savedLeft = localStorage.getItem('noir-gui-left');
+        if (savedTop !== null && savedLeft !== null) {
+            elmnt.style.top = savedTop + 'px';
+            elmnt.style.left = savedLeft + 'px';
+            elmnt.style.bottom = 'auto';
+            elmnt.style.right = 'auto';
+        }
+        
         header.style.cursor = 'grab';
         
         const dragMouseDown = (e) => {
-            // Chỉ drag khi click vào header, không phải các nút bên trong
             if (e.target.closest('#noir-toggle-btn')) return;
             if (e.target.closest('.noir-tab')) return;
             if (e.target.closest('button')) return;
             if (e.target.closest('.noir-btn')) return;
             
             e.preventDefault();
+            e.stopPropagation();
             pos3 = e.clientX;
             pos4 = e.clientY;
             header.style.cursor = 'grabbing';
@@ -549,15 +563,17 @@
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
+            
             let newTop = elmnt.offsetTop - pos2;
             let newLeft = elmnt.offsetLeft - pos1;
-            // Giới hạn trong viewport
-            newTop = Math.max(0, Math.min(newTop, window.innerHeight - 100));
-            newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - 200));
+            
             elmnt.style.top = newTop + "px";
             elmnt.style.left = newLeft + "px";
             elmnt.style.bottom = "auto";
             elmnt.style.right = "auto";
+            
+            localStorage.setItem('noir-gui-top', newTop);
+            localStorage.setItem('noir-gui-left', newLeft);
         };
         
         const closeDragElement = () => {
@@ -680,6 +696,7 @@
             document.getElementById('player-color-display').innerText = "Đang phát hiện...";
             document.getElementById('turn-display').innerText = "-";
             lastBestMove = "";
+            lastRenderedMove = "";
             clearArrows();
         };
         
@@ -709,12 +726,22 @@
                     engine.onmessage = (e) => {
                         const line = e.data;
                         if (typeof line === 'string') {
-                            if (line.startsWith('bestmove')) handleBestMove(line.split(' ')[1]);
+                            if (line.startsWith('bestmove')) {
+                                const depthMatch = line.match(/depth (\d+)/);
+                                const depth = depthMatch ? parseInt(depthMatch[1], 10) : 0;
+                                if (depth >= 15 || line.includes('ponder')) {
+                                    handleBestMove(line.split(' ')[1]);
+                                }
+                            }
                             else if (line.includes('info depth')) {
                                 const d = line.match(/depth (\d+)/);
-                                if (d) updateStatus(`🧠 Đang tính... (${d[1]})`);
+                                if (d) {
+                                    const depth = parseInt(d[1], 10);
+                                    updateStatus(`🧠 Đang tính... (${depth})`);
+                                    lastStableDepth = depth;
+                                }
                                 const pvMatch = line.match(/\spv\s+([a-h][1-8][a-h][1-8][qrbn]?(?:\s+[a-h][1-8][a-h][1-8][qrbn]?){0,5})/i);
-                                if (pvMatch && pvMatch[1]) {
+                                if (pvMatch && pvMatch[1] && lastStableDepth >= 12) {
                                     lastPvMoves = pvMatch[1].trim().split(/\s+/).filter(Boolean);
                                 }
                             }
@@ -782,10 +809,16 @@
         lastAnalyzedTurn = null;
         lastRenderedFenForArrows = "";
         lastObservedBoardFenPart = "";
+        lastRenderedMove = "";
         if (pendingAnalyzeTimeout) {
             clearTimeout(pendingAnalyzeTimeout);
             pendingAnalyzeTimeout = null;
         }
+        if (arrowDebounceTimer) {
+            clearTimeout(arrowDebounceTimer);
+            arrowDebounceTimer = null;
+        }
+        pendingArrowMove = null;
         scheduledFenForAnalyze = "";
         playerColor = null;
         lastPlayerColorSource = "unknown";
@@ -1129,7 +1162,7 @@
         };
     }
 
-    // --- ARROW DRAWING (Cải thiện) ---
+    // --- ARROW DRAWING ---
     function drawMoveArrows(primaryMove, secondaryMove, options = {}) {
         if (!showArrows) return;
         
@@ -1137,29 +1170,21 @@
         if (oldLayer) oldLayer.remove();
         
         const board = getActiveBoardElement();
-        if (!board) {
-            console.warn('No board element found for arrows');
-            return;
-        }
+        if (!board) return;
         
-        // Đợi board render xong
         setTimeout(() => {
             const freshBoard = getActiveBoardElement();
             if (!freshBoard) return;
             
             if (!primaryMove && !secondaryMove) return;
             
-            // Kiểm tra tọa độ có hợp lệ không
             const testMove = primaryMove || secondaryMove;
             if (testMove && testMove.length >= 4) {
                 const from = testMove.substring(0,2);
                 const to = testMove.substring(2,4);
                 const fC = squareToCoords(from, freshBoard);
                 const tC = squareToCoords(to, freshBoard);
-                if (!fC || !tC) {
-                    console.warn('Invalid coordinates for move:', testMove);
-                    return;
-                }
+                if (!fC || !tC) return;
             }
             
             const layer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1206,7 +1231,6 @@
                     line.classList.add("promo-neon");
                 }
                 layer.appendChild(line);
-                // Force reflow để animation chạy
                 void line.offsetHeight;
                 line.style.strokeDashoffset = "0";
             };
@@ -1214,7 +1238,6 @@
             appendArrow(secondaryMove, "rgba(248,113,113,0.85)", "noir-arrowhead-red", 10);
             appendArrow(primaryMove, "rgba(168,85,247,0.95)", "noir-arrowhead-green", 14, !!options.primaryPromotion);
             
-            // Đảm bảo board có position relative để SVG định vị chính xác
             if (getComputedStyle(freshBoard).position === 'static') {
                 freshBoard.style.position = 'relative';
             }
@@ -1317,7 +1340,7 @@
         
         engine.postMessage('stop');
         engine.postMessage(`position fen ${fen}`);
-        engine.postMessage(`go movetime 300 depth 20`);
+        engine.postMessage(`go movetime 800 depth 22`);
         
         if (analyzeTimeoutId) clearTimeout(analyzeTimeoutId);
         analyzeTimeoutId = setTimeout(() => {
@@ -1393,19 +1416,19 @@
         }
 
         updateStatus("✨ Đến lượt bạn!");
-        const moveInfo = parsePromotionMove(safeMove);
         
-        // Xóa layer cũ trước khi vẽ mới
-        clearArrows();
-        // Vẽ mũi tên
-        drawMoveArrows(safeMove, null, { primaryPromotion: moveInfo.promotion });
-        
-        // Dự phòng: nếu sau 300ms vẫn chưa có arrow, thử vẽ lại
-        setTimeout(() => {
-            if (showArrows && !document.getElementById('noir-arrow-layer') && lastBestMove === safeMove) {
-                drawMoveArrows(safeMove, null, { primaryPromotion: moveInfo.promotion });
+        // DEBOUNCE: Chờ 500ms trước khi vẽ, nếu có move mới hơn thì thay thế
+        if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
+        pendingArrowMove = { move: safeMove, promotion: parsedBestMove.promotion };
+        arrowDebounceTimer = setTimeout(() => {
+            if (pendingArrowMove && showArrows && pendingArrowMove.move === lastBestMove) {
+                clearArrows();
+                drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
+                lastRenderedMove = pendingArrowMove.move;
+                pendingArrowMove = null;
             }
-        }, 300);
+            arrowDebounceTimer = null;
+        }, 500);
     }
 
     // --- MAIN LOOP ---
@@ -1465,18 +1488,29 @@
                         }
                     }
                     
-                    if (showArrows && fen && (lastBestMove || (lastPvMoves && lastPvMoves.length)) && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
+                    if (showArrows && fen && lastBestMove && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
                         const liveTurn = getCurrentTurnFromFen(fen);
-                        if (liveTurn === playerColor && lastBestMove) {
+                        if (liveTurn === playerColor && lastBestMove && lastRenderedMove !== lastBestMove) {
                             const safeLiveMove = resolveSafeMoveForFen(lastBestMove, fen, liveTurn);
-                            if (safeLiveMove) {
-                                const moveInfo = parsePromotionMove(safeLiveMove);
-                                drawMoveArrows(safeLiveMove, null, { primaryPromotion: moveInfo.promotion });
-                                lastRenderedFenForArrows = fen;
+                            if (safeLiveMove && safeLiveMove !== lastRenderedMove) {
+                                if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
+                                const parsedMove = parsePromotionMove(safeLiveMove);
+                                pendingArrowMove = { move: safeLiveMove, promotion: parsedMove.promotion };
+                                arrowDebounceTimer = setTimeout(() => {
+                                    if (pendingArrowMove && showArrows) {
+                                        clearArrows();
+                                        drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
+                                        lastRenderedMove = pendingArrowMove.move;
+                                        pendingArrowMove = null;
+                                    }
+                                    arrowDebounceTimer = null;
+                                }, 500);
                             }
+                            lastRenderedFenForArrows = fen;
                         } else if (liveTurn !== playerColor) {
                             clearArrows();
                             lastRenderedFenForArrows = fen;
+                            lastRenderedMove = "";
                         }
                     }
                 }
