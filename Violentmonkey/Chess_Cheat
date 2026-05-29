@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess Noir
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      3.0
 // @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
 // @author       Noir
 // @match        *://www.chess.com/*
@@ -20,7 +20,6 @@
     // --- CONFIG ---
     const STOCKFISH_URL = "https://cdn.jsdelivr.net/npm/stockfish@11/stockfish.js";
     const FALLBACK_URL = "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js";
-    const GUI_IMAGE = "https://repository-images.githubusercontent.com/633213733/43fe45c6-9da6-4fb7-9c33-f70a3d65504d";
     
     let engine = null;
     let lastFen = "";
@@ -30,579 +29,410 @@
     let isScriptEnabled = true;
     let showArrows = true;
     let autoAnalyze = true;
-    let guiCollapsed = false;
     let playerColor = null;
     let lastPlayerColorSource = "unknown";
-    let activeTab = 'main';
     let lastAnalyzedFen = "";
     let lastRenderedFenForArrows = "";
     let lastObservedBoardFenPart = "";
-    let latestLiveFen = "";
     let pendingAnalyzeTimeout = null;
-    let scheduledFenForAnalyze = "";
     let analyzeTimeoutId = null;
     let activeAnalyzeToken = 0;
     let pendingArrowMove = null;
     let arrowDebounceTimer = null;
     let lastRenderedMove = "";
     let lastStableDepth = 0;
+    let panelVisible = false;
+    let isDraggingFloat = false;
+    let floatMoved = false;
+    let floatOffsetX = 0, floatOffsetY = 0;
+    let isDraggingPanel = false;
+    let panelOffsetX = 0, panelOffsetY = 0;
+    
     const START_POSITION_BOARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+    const STORAGE_KEY = "chess-noir-settings";
 
-    // --- STYLES (Màu tím) ---
+    // Load saved settings
+    function loadSettings() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+            if (saved.floatTop) document.getElementById('noir-float-btn')?.style.setProperty('top', saved.floatTop + 'px', 'important');
+            if (saved.floatLeft) document.getElementById('noir-float-btn')?.style.setProperty('left', saved.floatLeft + 'px', 'important');
+            if (saved.floatRight) document.getElementById('noir-float-btn')?.style.setProperty('right', saved.floatRight + 'px', 'important');
+            if (saved.floatBottom) document.getElementById('noir-float-btn')?.style.setProperty('bottom', saved.floatBottom + 'px', 'important');
+            if (saved.panelTop) document.getElementById('noir-panel')?.style.setProperty('top', saved.panelTop + 'px', 'important');
+            if (saved.panelLeft) document.getElementById('noir-panel')?.style.setProperty('left', saved.panelLeft + 'px', 'important');
+            return saved;
+        } catch(e) { return {}; }
+    }
+
+    function saveSettings(settings) {
+        try {
+            const current = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+            Object.assign(current, settings);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        } catch(e) {}
+    }
+
+    // --- STYLES (không animation) ---
     GM_addStyle(`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
-
-        #noir-gui {
-            --noir-bg-1: rgba(7, 20, 32, 0.92);
-            --noir-bg-2: rgba(12, 33, 44, 0.9);
-            --noir-border: rgba(180, 130, 255, 0.35);
-            --noir-accent: #a855f7;
-            --noir-accent-2: #c084fc;
-            --noir-hot: #d946ef;
-            position: fixed;
-            top: 100px;
-            right: 20px;
-            width: 340px;
-            background:
-                radial-gradient(120% 130% at 10% -10%, rgba(168, 85, 247, 0.2), transparent 48%),
-                radial-gradient(120% 140% at 95% 100%, rgba(192, 132, 252, 0.22), transparent 50%),
-                linear-gradient(160deg, var(--noir-bg-1), var(--noir-bg-2));
-            backdrop-filter: blur(18px) saturate(135%) !important;
-            border-radius: 18px !important;
-            border: 1px solid var(--noir-border) !important;
-            box-shadow: 0 16px 54px rgba(0, 0, 0, 0.58), inset 0 0 0 1px rgba(255,255,255,0.04) !important;
-            color: white !important;
-            font-family: 'Space Grotesk', sans-serif !important;
+        #noir-float-btn {
+            position: fixed !important;
+            right: 20px !important;
+            bottom: 100px !important;
+            width: 56px !important;
+            height: 56px !important;
+            border-radius: 50% !important;
+            background: linear-gradient(135deg, #8b5cf6, #a855f7) !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            font-size: 28px !important;
+            cursor: pointer !important;
             z-index: 2147483647 !important;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.5) !important;
             user-select: none !important;
-            display: none;
-            overflow: hidden;
-            isolation: isolate;
-            animation: noir-gui-enter 0.42s cubic-bezier(.2,.8,.2,1);
+            touch-action: none !important;
+            font-family: 'Segoe UI', sans-serif !important;
         }
-        #noir-gui::before {
-            content: '';
-            position: absolute;
-            inset: -130px;
-            background: conic-gradient(from 80deg, transparent 0deg, rgba(168, 85, 247, 0.28) 90deg, transparent 170deg, rgba(192, 132, 252, 0.22) 250deg, transparent 360deg);
-            filter: blur(22px);
-            animation: noir-border-spin 11s linear infinite;
-            pointer-events: none;
-            z-index: -2;
+        
+        #noir-panel {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            width: 340px !important;
+            background: linear-gradient(160deg, rgba(7,20,32,0.95), rgba(12,33,44,0.95)) !important;
+            backdrop-filter: blur(18px) !important;
+            border: 1px solid rgba(180,130,255,0.4) !important;
+            border-radius: 18px !important;
+            box-shadow: 0 16px 54px rgba(0,0,0,0.58) !important;
+            color: white !important;
+            font-family: 'Segoe UI', 'Space Grotesk', sans-serif !important;
+            z-index: 2147483646 !important;
+            display: none !important;
+            overflow: hidden !important;
         }
-        #noir-gui::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border-radius: inherit;
-            background: linear-gradient(130deg, rgba(255,255,255,0.06), rgba(255,255,255,0));
-            pointer-events: none;
-            z-index: -1;
+        
+        #noir-panel-header {
+            padding: 14px 16px !important;
+            background: linear-gradient(128deg, rgba(139,92,246,0.35), rgba(217,70,239,0.3)) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+            cursor: grab !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
         }
-        #noir-gui.collapsed {
-            width: 220px !important;
+        #noir-panel-header:active { cursor: grabbing !important; }
+        
+        #noir-panel-header .title {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            font-weight: 700 !important;
+            font-size: 14px !important;
+            letter-spacing: 0.5px !important;
+            pointer-events: none !important;
         }
-
-        #noir-gui-header {
-            position: relative;
-            padding: 14px 16px;
-            background: linear-gradient(128deg, rgba(139, 92, 246, 0.35), rgba(217, 70, 239, 0.3));
-            border-bottom: 1px solid rgba(255,255,255,0.08);
-            cursor: grab;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+        
+        #noir-close-panel {
+            width: 28px !important;
+            height: 28px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            background: rgba(255,255,255,0.12) !important;
+            border: 1px solid rgba(255,255,255,0.17) !important;
+            border-radius: 8px !important;
+            cursor: pointer !important;
+            font-size: 16px !important;
+            transition: all 0.15s ease !important;
         }
-        #noir-gui-header:active {
-            cursor: grabbing;
+        #noir-close-panel:hover {
+            background: rgba(255,255,255,0.25) !important;
         }
-        #noir-gui-header .title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 800;
-            font-size: 13px;
-            letter-spacing: 0.7px;
-            pointer-events: none;
-        }
-        #noir-gui-header .title span {
-            text-transform: uppercase;
-            font-family: 'Sora', sans-serif;
-            text-shadow: 0 2px 9px rgba(0,0,0,0.35);
-        }
-        #noir-gui-header .title img {
-            width: 30px;
-            height: 30px;
-            border-radius: 9px;
-            object-fit: cover;
-            border: 1px solid rgba(255,255,255,0.35);
-            box-shadow: 0 8px 20px rgba(0,0,0,0.35);
-            animation: noir-avatar-bob 3.8s ease-in-out infinite;
-        }
-        #noir-toggle-btn {
-            width: 30px;
-            height: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(255,255,255,0.12);
-            border: 1px solid rgba(255,255,255,0.17);
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 18px;
-            font-weight: 700;
-            transition: transform 0.25s ease, background 0.25s ease;
-            z-index: 10;
-        }
-        #noir-toggle-btn:hover {
-            transform: rotate(7deg) scale(1.06);
-            background: rgba(255,255,255,0.22);
-        }
-
+        
         #noir-tabs {
-            display: flex;
-            gap: 6px;
-            padding: 7px 8px 8px;
-            background: linear-gradient(180deg, rgba(0,0,0,0.24), rgba(0,0,0,0.12));
-            border-bottom: 1px solid rgba(255,255,255,0.08);
+            display: flex !important;
+            gap: 6px !important;
+            padding: 7px 8px 8px !important;
+            background: linear-gradient(180deg, rgba(0,0,0,0.24), rgba(0,0,0,0.12)) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
         }
+        
         .noir-tab {
-            flex: 1;
-            position: relative;
-            padding: 10px 7px;
-            text-align: center;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.18px;
-            color: rgba(255,255,255,0.64);
-            cursor: pointer;
-            border-radius: 10px;
-            transition: all 0.24s ease;
-            overflow: hidden;
-        }
-        .noir-tab::after {
-            content: '';
-            position: absolute;
-            left: 18%;
-            right: 18%;
-            bottom: 2px;
-            height: 2px;
-            border-radius: 3px;
-            background: linear-gradient(90deg, var(--noir-accent), var(--noir-accent-2));
-            transform: scaleX(0);
-            transform-origin: center;
-            transition: transform 0.28s ease;
+            flex: 1 !important;
+            padding: 8px 6px !important;
+            text-align: center !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            color: rgba(255,255,255,0.64) !important;
+            cursor: pointer !important;
+            border-radius: 10px !important;
+            transition: all 0.15s ease !important;
         }
         .noir-tab:hover {
-            color: rgba(255,255,255,0.88);
-            background: rgba(255,255,255,0.1);
-            transform: translateY(-1px);
+            color: rgba(255,255,255,0.88) !important;
+            background: rgba(255,255,255,0.08) !important;
         }
         .noir-tab.active {
-            color: #ffffff;
-            background: linear-gradient(125deg, rgba(139, 92, 246, 0.3), rgba(217, 70, 239, 0.28));
-            box-shadow: 0 9px 24px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.12);
+            color: #ffffff !important;
+            background: linear-gradient(125deg, rgba(139,92,246,0.35), rgba(217,70,239,0.3)) !important;
         }
-        .noir-tab.active::after {
-            transform: scaleX(1);
+        
+        #noir-panel-body {
+            padding: 14px !important;
         }
-
-        #noir-gui-body {
-            padding: 14px;
-        }
+        
         .noir-tab-content {
-            display: none;
-            opacity: 0;
-            transform: translateY(7px);
+            display: none !important;
         }
         .noir-tab-content.active {
-            display: block;
-            opacity: 1;
-            transform: translateY(0);
-            animation: noir-tab-reveal 0.33s ease;
+            display: block !important;
         }
-
+        
         .noir-card {
-            position: relative;
-            background: linear-gradient(154deg, rgba(255,255,255,0.11), rgba(255,255,255,0.04));
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 14px;
-            padding: 14px 15px;
-            margin-bottom: 10px;
-            overflow: hidden;
-            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
-            animation: noir-card-pop .34s ease both;
+            background: linear-gradient(154deg, rgba(255,255,255,0.1), rgba(255,255,255,0.03)) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 14px !important;
+            padding: 12px 14px !important;
+            margin-bottom: 10px !important;
         }
-        .noir-card::before {
-            content: '';
-            position: absolute;
-            top: -160%;
-            left: -35%;
-            width: 54%;
-            height: 370%;
-            background: linear-gradient(120deg, transparent, rgba(255,255,255,0.22), transparent);
-            transform: rotate(13deg);
-            transition: left 0.56s ease;
-            pointer-events: none;
-        }
-        .noir-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(255,255,255,0.22);
-        }
-        .noir-card:hover::before {
-            left: 110%;
-        }
-        #tab-main .noir-card:nth-child(1) { animation-delay: 0.03s; }
-        #tab-main .noir-card:nth-child(2) { animation-delay: 0.08s; }
-        #tab-main .noir-card:nth-child(3) { animation-delay: 0.13s; }
-        #tab-main .noir-card:nth-child(4) { animation-delay: 0.18s; }
-        #tab-settings .noir-setting { animation: noir-card-pop 0.34s ease both; }
-        #tab-settings .noir-setting:nth-child(1) { animation-delay: 0.04s; }
-        #tab-settings .noir-setting:nth-child(2) { animation-delay: 0.08s; }
-        #tab-settings .noir-setting:nth-child(3) { animation-delay: 0.12s; }
-
+        
         .noir-card-label {
-            font-size: 10px;
-            font-weight: 700;
-            color: rgba(255,255,255,0.58);
-            text-transform: uppercase;
-            letter-spacing: 0.7px;
-            margin-bottom: 6px;
+            font-size: 10px !important;
+            font-weight: 700 !important;
+            color: rgba(255,255,255,0.6) !important;
+            text-transform: uppercase !important;
+            margin-bottom: 5px !important;
         }
+        
         .noir-card-value {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 16px;
-            font-weight: 700;
-            text-shadow: 0 1px 10px rgba(0,0,0,0.2);
+            font-size: 15px !important;
+            font-weight: 700 !important;
         }
-        .noir-card-value.green { color: #a855f7; }
-        .noir-card-value.yellow { color: #c084fc; }
-        .noir-card-value.red { color: #ff8080; }
+        .noir-card-value.green { color: #a855f7 !important; }
+        .noir-card-value.yellow { color: #c084fc !important; }
+        
         #best-move-text {
-            font-size: 20px !important;
-            letter-spacing: 0.35px;
+            font-size: 18px !important;
         }
-        #best-move-meta {
-            margin-top: 6px;
-            min-height: 18px;
-            font-size: 12px;
-            color: rgba(255,255,255,0.88);
-            font-weight: 700;
-            letter-spacing: 0.22px;
-        }
-        #best-move-meta.promotion-meta {
-            color: #d8b4fe;
-            text-shadow: 0 0 10px rgba(168, 85, 247, 0.38);
-        }
-
+        
         .noir-btn {
-            width: 100%;
-            padding: 12px;
-            margin-top: 8px;
-            border: 1px solid transparent;
-            border-radius: 11px;
-            font-family: 'Sora', sans-serif;
-            font-weight: 700;
-            font-size: 13px;
-            cursor: pointer;
-            transition: transform 0.22s ease, box-shadow 0.22s ease, filter 0.22s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        .noir-btn::before {
-            content: '';
-            position: absolute;
-            top: -40%;
-            left: -120%;
-            width: 55%;
-            height: 180%;
-            background: linear-gradient(120deg, transparent, rgba(255,255,255,0.45), transparent);
-            transform: rotate(15deg);
-            transition: left 0.45s ease;
-        }
-        .noir-btn:hover {
-            transform: translateY(-2px);
-            filter: brightness(1.05);
-        }
-        .noir-btn:hover::before {
-            left: 120%;
-        }
-        .noir-btn:active {
-            transform: translateY(0);
+            width: 100% !important;
+            padding: 10px !important;
+            margin-top: 8px !important;
+            border: none !important;
+            border-radius: 11px !important;
+            font-weight: 700 !important;
+            font-size: 13px !important;
+            cursor: pointer !important;
+            transition: all 0.15s ease !important;
         }
         .noir-btn-primary {
-            background: linear-gradient(130deg, #8b5cf6, #a855f7);
-            color: white;
-            box-shadow: 0 11px 24px rgba(139, 92, 246, 0.28);
+            background: linear-gradient(130deg, #8b5cf6, #a855f7) !important;
+            color: white !important;
         }
         .noir-btn-danger {
-            background: linear-gradient(130deg, #f0735b, #e74b6f);
-            color: white;
-            box-shadow: 0 11px 24px rgba(232, 88, 95, 0.24);
+            background: linear-gradient(130deg, #f0735b, #e74b6f) !important;
+            color: white !important;
         }
-        .noir-btn.scanning {
-            animation: noir-scan-beat 0.92s ease infinite;
-            box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.44);
+        .noir-btn-primary:hover, .noir-btn-danger:hover {
+            filter: brightness(1.05) !important;
+            transform: translateY(-1px) !important;
         }
-
+        
         .noir-setting {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            padding: 10px 0 !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
         }
         .noir-setting:last-child {
-            border-bottom: none;
+            border-bottom: none !important;
         }
         .noir-setting-label {
-            font-size: 13px;
-            color: rgba(255,255,255,0.93);
+            font-size: 13px !important;
+            color: rgba(255,255,255,0.93) !important;
         }
         .noir-toggle {
-            width: 46px;
-            height: 24px;
-            background: rgba(255,255,255,0.18);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 20px;
-            position: relative;
-            cursor: pointer;
-            transition: all 0.24s ease;
+            width: 44px !important;
+            height: 22px !important;
+            background: rgba(255,255,255,0.2) !important;
+            border-radius: 20px !important;
+            position: relative !important;
+            cursor: pointer !important;
         }
         .noir-toggle.on {
-            background: linear-gradient(130deg, #8b5cf6, #d946ef);
-            border-color: rgba(255,255,255,0.38);
+            background: linear-gradient(130deg, #8b5cf6, #d946ef) !important;
         }
         .noir-toggle::after {
-            content: '';
-            position: absolute;
-            width: 18px;
-            height: 18px;
-            background: #fff;
-            border-radius: 50%;
-            top: 2px;
-            left: 3px;
-            box-shadow: 0 5px 14px rgba(0,0,0,0.34);
-            transition: all 0.24s ease;
+            content: '' !important;
+            position: absolute !important;
+            width: 18px !important;
+            height: 18px !important;
+            background: #fff !important;
+            border-radius: 50% !important;
+            top: 2px !important;
+            left: 3px !important;
+            transition: left 0.15s ease !important;
         }
         .noir-toggle.on::after {
-            left: 23px;
+            left: 23px !important;
         }
-
+        
         #noir-arrow-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            pointer-events: none !important;
             z-index: 10000 !important;
         }
         .best-move-arrow {
             stroke-dasharray: 1000;
             stroke-dashoffset: 1000;
-            animation: draw-arrow 0.34s ease-out forwards;
-        }
-        .best-move-arrow.promo-neon {
-            stroke: rgba(168, 85, 247, 0.95) !important;
-            filter: drop-shadow(0 0 7px rgba(168, 85, 247, 0.95)) drop-shadow(0 0 15px rgba(139, 92, 246, 0.7));
-            animation: draw-arrow 0.34s ease-out forwards, promo-arrow-pulse 0.6s ease-out;
-        }
-        #best-move-text.promotion-highlight {
-            color: #d8b4fe !important;
-            font-weight: 800;
-            text-shadow: 0 0 10px rgba(168, 85, 247, 0.88), 0 0 16px rgba(139, 92, 246, 0.44);
-            animation: promo-text-pop 0.45s ease-out;
-        }
-        .noir-promotion-burst {
-            position: absolute;
-            width: 12.5%;
-            height: 12.5%;
-            pointer-events: none;
-            border-radius: 14px;
-            transform-origin: center;
-            z-index: 1200;
-            background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(168, 85, 247, 0.7) 40%, rgba(139, 92, 246, 0.15) 85%, transparent 100%);
-            box-shadow: 0 0 30px rgba(168, 85, 247, 0.9), 0 0 42px rgba(139, 92, 246, 0.45);
-            animation: promo-square-pop 0.55s ease-out forwards, promo-square-pulse 0.6s ease-out;
-        }
-        .noir-promotion-ring {
-            position: absolute;
-            width: 12.5%;
-            height: 12.5%;
-            pointer-events: none;
-            border-radius: 14px;
-            border: 2px solid rgba(168, 85, 247, 0.92);
-            z-index: 1199;
-            box-shadow: 0 0 18px rgba(168, 85, 247, 0.75);
-            animation: promo-ring-wave 0.6s ease-out forwards;
-        }
-        .noir-promotion-particle {
-            position: absolute;
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            pointer-events: none;
-            background: rgba(255,255,255,0.92);
-            box-shadow: 0 0 10px rgba(255,255,255,0.95), 0 0 16px rgba(168, 85, 247, 0.75);
-            z-index: 1201;
-            animation: promo-particle-burst 0.55s ease-out forwards;
-        }
-
-        @media (max-width: 768px) {
-            #noir-gui {
-                width: min(94vw, 360px);
-                right: 3vw;
-                top: 74px;
-            }
-            #noir-gui-body {
-                padding: 12px;
-            }
-            .noir-card {
-                padding: 13px;
-            }
-            .noir-tab {
-                font-size: 10.5px;
-                padding: 9px 6px;
-            }
-        }
-
-        @keyframes noir-gui-enter {
-            0% { opacity: 0; transform: translateY(12px) scale(0.96); }
-            100% { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes noir-border-spin {
-            100% { transform: rotate(360deg); }
-        }
-        @keyframes noir-avatar-bob {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            50% { transform: translateY(-2px) rotate(2deg); }
-        }
-        @keyframes noir-tab-reveal {
-            0% { opacity: 0; transform: translateY(9px); }
-            100% { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes noir-card-pop {
-            0% { opacity: 0; transform: translateY(8px) scale(0.985); }
-            100% { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes noir-scan-beat {
-            0% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.44); }
-            60% { transform: translateY(-2px) scale(1.01); box-shadow: 0 0 0 13px rgba(139, 92, 246, 0); }
-            100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+            animation: draw-arrow 0.25s ease-out forwards;
         }
         @keyframes draw-arrow {
             to { stroke-dashoffset: 0; }
         }
-        @keyframes promo-arrow-pulse {
-            0% { opacity: 0.8; stroke-width: 16; }
-            50% { opacity: 1; stroke-width: 19; }
-            100% { opacity: 0.95; stroke-width: 16; }
+        
+        .noir-promotion-burst, .noir-promotion-ring, .noir-promotion-particle {
+            position: absolute;
+            pointer-events: none;
+            z-index: 1200;
         }
-        @keyframes promo-text-pop {
-            0% { transform: scale(1); }
-            45% { transform: scale(1.13); }
-            100% { transform: scale(1); }
+        .noir-promotion-burst {
+            width: 12.5%;
+            height: 12.5%;
+            border-radius: 14px;
+            background: radial-gradient(circle, rgba(168,85,247,0.8) 0%, rgba(139,92,246,0.3) 100%);
+            animation: promo-fade 0.4s ease-out forwards;
         }
-        @keyframes promo-square-pop {
-            0% { opacity: 0.25; transform: scale(0.95); }
-            45% { opacity: 1; transform: scale(1.2); }
-            100% { opacity: 0; transform: scale(1.02); }
+        .noir-promotion-ring {
+            width: 12.5%;
+            height: 12.5%;
+            border-radius: 14px;
+            border: 2px solid rgba(168,85,247,0.8);
+            animation: promo-ring 0.4s ease-out forwards;
         }
-        @keyframes promo-square-pulse {
-            0% { filter: brightness(1); }
-            50% { filter: brightness(1.45); }
-            100% { filter: brightness(1); }
+        .noir-promotion-particle {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: rgba(168,85,247,0.9);
+            animation: promo-particle 0.4s ease-out forwards;
         }
-        @keyframes promo-ring-wave {
-            0% { opacity: 0.95; transform: scale(0.95); }
-            100% { opacity: 0; transform: scale(1.8); }
+        @keyframes promo-fade {
+            0% { opacity: 0.5; transform: scale(0.9); }
+            100% { opacity: 0; transform: scale(1.1); }
         }
-        @keyframes promo-particle-burst {
-            0% { opacity: 0.95; transform: translate(0, 0) scale(1); }
-            100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.35); }
+        @keyframes promo-ring {
+            0% { opacity: 0.8; transform: scale(0.9); }
+            100% { opacity: 0; transform: scale(1.6); }
+        }
+        @keyframes promo-particle {
+            0% { opacity: 1; transform: translate(0,0) scale(1); }
+            100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
         }
     `);
 
-    // --- DRAG FUNCTION (Tự do + nhớ vị trí) ---
-    function dragElement(elmnt) {
-        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-        const header = document.getElementById('noir-gui-header');
-        if (!header) return;
+    // --- CREATE FLOAT BUTTON ---
+    function createFloatButton() {
+        if (document.getElementById('noir-float-btn')) return;
         
-        // Khôi phục vị trí đã lưu
-        const savedTop = localStorage.getItem('noir-gui-top');
-        const savedLeft = localStorage.getItem('noir-gui-left');
-        if (savedTop !== null && savedLeft !== null) {
-            elmnt.style.top = savedTop + 'px';
-            elmnt.style.left = savedLeft + 'px';
-            elmnt.style.bottom = 'auto';
-            elmnt.style.right = 'auto';
-        }
+        const btn = document.createElement('div');
+        btn.id = 'noir-float-btn';
+        btn.innerHTML = '♞';
+        btn.style.cssText = `
+            position: fixed;
+            right: 20px;
+            bottom: 100px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #8b5cf6, #a855f7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 28px;
+            cursor: pointer;
+            z-index: 2147483647;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.5);
+            user-select: none;
+            touch-action: none;
+            font-family: 'Segoe UI', sans-serif;
+        `;
+        document.body.appendChild(btn);
         
-        header.style.cursor = 'grab';
+        // Drag float button
+        btn.addEventListener('mousedown', startFloatDrag);
+        btn.addEventListener('touchstart', startFloatDrag);
         
-        const dragMouseDown = (e) => {
-            if (e.target.closest('#noir-toggle-btn')) return;
-            if (e.target.closest('.noir-tab')) return;
-            if (e.target.closest('button')) return;
-            if (e.target.closest('.noir-btn')) return;
-            
-            e.preventDefault();
-            e.stopPropagation();
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            header.style.cursor = 'grabbing';
-            document.onmouseup = closeDragElement;
-            document.onmousemove = elementDrag;
-        };
+        // Click toggle panel
+        btn.addEventListener('click', (e) => {
+            if (floatMoved) {
+                floatMoved = false;
+                return;
+            }
+            togglePanel();
+        });
         
-        const elementDrag = (e) => {
-            e.preventDefault();
-            pos1 = pos3 - e.clientX;
-            pos2 = pos4 - e.clientY;
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            
-            let newTop = elmnt.offsetTop - pos2;
-            let newLeft = elmnt.offsetLeft - pos1;
-            
-            elmnt.style.top = newTop + "px";
-            elmnt.style.left = newLeft + "px";
-            elmnt.style.bottom = "auto";
-            elmnt.style.right = "auto";
-            
-            localStorage.setItem('noir-gui-top', newTop);
-            localStorage.setItem('noir-gui-left', newLeft);
-        };
-        
-        const closeDragElement = () => {
-            document.onmouseup = null;
-            document.onmousemove = null;
-            header.style.cursor = 'grab';
-        };
-        
-        header.onmousedown = dragMouseDown;
+        return btn;
     }
-
-    // --- GUI ---
-    function createGUI() {
-        if (document.getElementById('noir-gui')) return;
-        const gui = document.createElement('div');
-        gui.id = 'noir-gui';
-        gui.innerHTML = `
-            <div id="noir-gui-header">
+    
+    function startFloatDrag(e) {
+        isDraggingFloat = true;
+        floatMoved = false;
+        const btn = document.getElementById('noir-float-btn');
+        const touch = e.touches ? e.touches[0] : e;
+        const rect = btn.getBoundingClientRect();
+        floatOffsetX = touch.clientX - rect.left;
+        floatOffsetY = touch.clientY - rect.top;
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    
+    function onFloatDrag(e) {
+        if (!isDraggingFloat) return;
+        floatMoved = true;
+        const btn = document.getElementById('noir-float-btn');
+        const touch = e.touches ? e.touches[0] : e;
+        let newLeft = touch.clientX - floatOffsetX;
+        let newTop = touch.clientY - floatOffsetY;
+        
+        btn.style.left = newLeft + 'px';
+        btn.style.top = newTop + 'px';
+        btn.style.right = 'auto';
+        btn.style.bottom = 'auto';
+        
+        saveSettings({ floatLeft: newLeft, floatTop: newTop });
+    }
+    
+    function endFloatDrag() {
+        isDraggingFloat = false;
+        setTimeout(() => { floatMoved = false; }, 100);
+    }
+    
+    // --- CREATE PANEL ---
+    function createPanel() {
+        if (document.getElementById('noir-panel')) return;
+        
+        const panel = document.createElement('div');
+        panel.id = 'noir-panel';
+        panel.innerHTML = `
+            <div id="noir-panel-header">
                 <div class="title">
-                    <img src="${GUI_IMAGE}">
-                    <span>CHESS NOIR</span>
+                    <span>♞ CHESS NOIR</span>
                 </div>
-                <div id="noir-toggle-btn">−</div>
+                <div id="noir-close-panel">✕</div>
             </div>
             <div id="noir-tabs">
                 <div class="noir-tab active" data-tab="main">🎯 Chính</div>
                 <div class="noir-tab" data-tab="settings">⚙️ Cài đặt</div>
             </div>
-            <div id="noir-gui-body">
+            <div id="noir-panel-body">
                 <div class="noir-tab-content active" id="tab-main">
                     <div class="noir-card">
                         <div class="noir-card-label">Trạng thái</div>
@@ -614,8 +444,8 @@
                     </div>
                     <div class="noir-card">
                         <div class="noir-card-label">Nước đi tốt nhất</div>
-                        <div class="noir-card-value green" id="best-move-text" style="font-size:20px;">-</div>
-                        <div id="best-move-meta"></div>
+                        <div class="noir-card-value green" id="best-move-text">-</div>
+                        <div id="best-move-meta" style="font-size:11px; margin-top:5px;"></div>
                     </div>
                     <div class="noir-card">
                         <div class="noir-card-label">Lượt đi</div>
@@ -636,30 +466,34 @@
                         <span class="noir-setting-label">Tự động phân tích</span>
                         <div class="noir-toggle on" id="toggle-auto"></div>
                     </div>
-                    <button id="reset-all" class="noir-btn noir-btn-danger">🗑️ Đặt lại tất cả</button>
+                    <button id="reset-all" class="noir-btn noir-btn-danger">🗑️ Đặt lại</button>
                 </div>
             </div>
         `;
-        document.body.appendChild(gui);
+        document.body.appendChild(panel);
         
-        document.getElementById('noir-toggle-btn').onclick = () => {
-            guiCollapsed = !guiCollapsed;
-            gui.classList.toggle('collapsed', guiCollapsed);
-            document.getElementById('noir-gui-body').style.display = guiCollapsed ? 'none' : 'block';
-            document.getElementById('noir-tabs').style.display = guiCollapsed ? 'none' : 'flex';
-            document.getElementById('noir-toggle-btn').innerText = guiCollapsed ? '+' : '−';
+        // Drag panel
+        const header = document.getElementById('noir-panel-header');
+        header.addEventListener('mousedown', startPanelDrag);
+        header.addEventListener('touchstart', startPanelDrag);
+        
+        // Close button
+        document.getElementById('noir-close-panel').onclick = () => {
+            panelVisible = false;
+            panel.style.display = 'none';
         };
         
+        // Tabs
         document.querySelectorAll('.noir-tab').forEach(tab => {
             tab.onclick = () => {
                 document.querySelectorAll('.noir-tab').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.noir-tab-content').forEach(c => c.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-                activeTab = tab.dataset.tab;
             };
         });
         
+        // Toggle script
         document.getElementById('toggle-script').onclick = function() {
             isScriptEnabled = !isScriptEnabled;
             this.classList.toggle('on', isScriptEnabled);
@@ -671,28 +505,30 @@
             }
         };
         
+        // Toggle arrows
         document.getElementById('toggle-arrows').onclick = function() {
             showArrows = !showArrows;
             this.classList.toggle('on', showArrows);
             if (!showArrows) clearArrows();
         };
         
+        // Toggle auto
         document.getElementById('toggle-auto').onclick = function() {
             autoAnalyze = !autoAnalyze;
             this.classList.toggle('on', autoAnalyze);
         };
         
+        // Force analyze
         document.getElementById('force-analyze').onclick = () => {
             resetAnalysis();
         };
         
+        // Reset all
         document.getElementById('reset-all').onclick = () => {
-            resetRuntimeState("reset-all-button");
+            resetRuntimeState("reset-all");
             updateStatus("✅ Sẵn sàng");
             document.getElementById('best-move-text').innerText = "-";
-            document.getElementById('best-move-text').classList.remove('promotion-highlight');
-            document.getElementById('best-move-meta').innerText = "";
-            document.getElementById('best-move-meta').classList.remove('promotion-meta');
+            document.getElementById('best-move-meta').innerHTML = "";
             document.getElementById('player-color-display').innerText = "Đang phát hiện...";
             document.getElementById('turn-display').innerText = "-";
             lastBestMove = "";
@@ -700,9 +536,64 @@
             clearArrows();
         };
         
-        dragElement(gui);
+        return panel;
     }
-
+    
+    function startPanelDrag(e) {
+        isDraggingPanel = true;
+        const panel = document.getElementById('noir-panel');
+        const touch = e.touches ? e.touches[0] : e;
+        const rect = panel.getBoundingClientRect();
+        panelOffsetX = touch.clientX - rect.left;
+        panelOffsetY = touch.clientY - rect.top;
+        panel.style.transform = 'none';
+        panel.style.top = rect.top + 'px';
+        panel.style.left = rect.left + 'px';
+        e.preventDefault();
+    }
+    
+    function onPanelDrag(e) {
+        if (!isDraggingPanel) return;
+        const panel = document.getElementById('noir-panel');
+        const touch = e.touches ? e.touches[0] : e;
+        let newLeft = touch.clientX - panelOffsetX;
+        let newTop = touch.clientY - panelOffsetY;
+        
+        panel.style.left = newLeft + 'px';
+        panel.style.top = newTop + 'px';
+        
+        saveSettings({ panelLeft: newLeft, panelTop: newTop });
+    }
+    
+    function endPanelDrag() {
+        isDraggingPanel = false;
+    }
+    
+    function togglePanel() {
+        const panel = document.getElementById('noir-panel');
+        if (!panel) return;
+        panelVisible = !panelVisible;
+        panel.style.display = panelVisible ? 'block' : 'none';
+    }
+    
+    // --- DRAG EVENT LISTENERS ---
+    document.addEventListener('mousemove', (e) => {
+        onFloatDrag(e);
+        onPanelDrag(e);
+    });
+    document.addEventListener('touchmove', (e) => {
+        onFloatDrag(e);
+        onPanelDrag(e);
+    });
+    document.addEventListener('mouseup', () => {
+        endFloatDrag();
+        endPanelDrag();
+    });
+    document.addEventListener('touchend', () => {
+        endFloatDrag();
+        endPanelDrag();
+    });
+    
     // --- ENGINE ---
     function initEngine(useFallback = false) {
         const url = useFallback ? FALLBACK_URL : STOCKFISH_URL;
@@ -729,7 +620,7 @@
                             if (line.startsWith('bestmove')) {
                                 const depthMatch = line.match(/depth (\d+)/);
                                 const depth = depthMatch ? parseInt(depthMatch[1], 10) : 0;
-                                if (depth >= 15 || line.includes('ponder')) {
+                                if (depth >= 12 || line.includes('ponder')) {
                                     handleBestMove(line.split(' ')[1]);
                                 }
                             }
@@ -740,8 +631,8 @@
                                     updateStatus(`🧠 Đang tính... (${depth})`);
                                     lastStableDepth = depth;
                                 }
-                                const pvMatch = line.match(/\spv\s+([a-h][1-8][a-h][1-8][qrbn]?(?:\s+[a-h][1-8][a-h][1-8][qrbn]?){0,5})/i);
-                                if (pvMatch && pvMatch[1] && lastStableDepth >= 12) {
+                                const pvMatch = line.match(/\spv\s+([a-h][1-8][a-h][1-8][qrbn]?(?:\s+[a-h][1-8][a-h][1-8][qrbn]?){0,3})/i);
+                                if (pvMatch && pvMatch[1] && lastStableDepth >= 10) {
                                     lastPvMoves = pvMatch[1].trim().split(/\s+/).filter(Boolean);
                                 }
                             }
@@ -752,28 +643,26 @@
                     engine.postMessage('isready');
                     updateStatus("✅ Sẵn sàng");
                 } catch (e) {
-                    console.error("Chess Noir: Worker creation failed", e);
+                    console.error("Chess Noir: Worker failed", e);
                     if (!useFallback) initEngine(true);
                     else updateStatus("❌ Lỗi Engine!");
                 }
             },
-            onerror: () => {
-                initEngine(true);
-            }
+            onerror: () => { initEngine(true); }
         });
     }
-
+    
     function updateStatus(t) {
         const el = document.getElementById('analysis-status');
         if(el) el.innerText = t;
     }
-
+    
     // --- UTILITY FUNCTIONS ---
     function getFenBoardPart(fen) {
         if (!fen || typeof fen !== 'string') return "";
         return (fen.trim().split(/\s+/)[0] || "");
     }
-
+    
     function normalizeFen(fen) {
         if (!fen || typeof fen !== 'string') return null;
         const parts = fen.trim().split(/\s+/).filter(Boolean);
@@ -791,7 +680,7 @@
         }
         return fullFen.join(' ');
     }
-
+    
     function getCurrentTurnFromFen(fen) {
         if (!fen || typeof fen !== 'string') return null;
         const parts = fen.trim().split(/\s+/);
@@ -800,7 +689,7 @@
         if (side === 'w' || side === 'b') return side;
         return null;
     }
-
+    
     function resetRuntimeState(reason = "manual") {
         lastFen = "";
         lastAnalyzedFen = "";
@@ -810,76 +699,31 @@
         lastRenderedFenForArrows = "";
         lastObservedBoardFenPart = "";
         lastRenderedMove = "";
-        if (pendingAnalyzeTimeout) {
-            clearTimeout(pendingAnalyzeTimeout);
-            pendingAnalyzeTimeout = null;
-        }
-        if (arrowDebounceTimer) {
-            clearTimeout(arrowDebounceTimer);
-            arrowDebounceTimer = null;
-        }
+        if (pendingAnalyzeTimeout) clearTimeout(pendingAnalyzeTimeout);
+        if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
         pendingArrowMove = null;
-        scheduledFenForAnalyze = "";
         playerColor = null;
-        lastPlayerColorSource = "unknown";
-        if (analyzeTimeoutId) {
-            clearTimeout(analyzeTimeoutId);
-            analyzeTimeoutId = null;
-        }
+        if (analyzeTimeoutId) clearTimeout(analyzeTimeoutId);
         clearArrows();
     }
-
+    
     function clearArrows() {
         const el = document.getElementById('noir-arrow-layer');
         if(el) el.remove();
-        document.querySelectorAll('.noir-promotion-burst, .noir-promotion-ring, .noir-promotion-particle').forEach((node) => node.remove());
+        document.querySelectorAll('.noir-promotion-burst, .noir-promotion-ring, .noir-promotion-particle').forEach(n => n.remove());
     }
-
-    function hideBestMoveText() {
-        const bestMoveEl = document.getElementById('best-move-text');
-        const bestMoveMetaEl = document.getElementById('best-move-meta');
-        if (bestMoveEl) {
-            bestMoveEl.innerText = "-";
-            bestMoveEl.classList.remove('promotion-highlight');
-        }
-        if (bestMoveMetaEl) {
-            bestMoveMetaEl.innerText = "";
-            bestMoveMetaEl.classList.remove('promotion-meta');
-        }
-    }
-
+    
     function parsePromotionMove(move) {
         const rawMove = (move || "").toLowerCase();
         const promotion = (rawMove.length === 5 && /[qrbn]/.test(rawMove[4])) ? rawMove[4] : null;
-        const toSquare = rawMove.length >= 4 ? rawMove.substring(2, 4) : null;
         if (!promotion) {
-            return {
-                move: rawMove,
-                promotion: null,
-                toSquare: toSquare,
-                display: rawMove ? rawMove.toUpperCase() : "-",
-                promotionLabel: "",
-                icon: ""
-            };
+            return { move: rawMove, promotion: null, display: rawMove ? rawMove.toUpperCase() : "-", promotionLabel: "", icon: "" };
         }
-
-        const promotionMap = {
-            q: { text: "Phong hậu", icon: "♕", code: "Q" },
-            r: { text: "Phong xe", icon: "♖", code: "R" },
-            b: { text: "Phong tượng", icon: "♗", code: "B" },
-            n: { text: "Phong mã", icon: "♘", code: "N" }
-        };
+        const promotionMap = { q: { text: "Phong hậu", icon: "♕", code: "Q" }, r: { text: "Phong xe", icon: "♖", code: "R" }, b: { text: "Phong tượng", icon: "♗", code: "B" }, n: { text: "Phong mã", icon: "♘", code: "N" } };
         const meta = promotionMap[promotion];
-        return {
-            move: rawMove,
-            promotion: promotion,
-            toSquare: toSquare,
-            display: `${toSquare}=${meta.code}`,
-            promotionLabel: meta.text,
-            icon: meta.icon
-        };
+        return { move: rawMove, promotion: promotion, display: `${rawMove.substring(2,4)}=${meta.code}`, promotionLabel: meta.text, icon: meta.icon };
     }
-
+    
     function parseBoardFromFen(fen) {
         const normalizedFen = normalizeFen(fen);
         if (!normalizedFen) return null;
@@ -889,8 +733,7 @@
         if (rows.length !== 8) return null;
         const board = {};
         const files = "abcdefgh";
-
-        for (let rankIdx = 0; rankIdx < 8; rankIdx += 1) {
+        for (let rankIdx = 0; rankIdx < 8; rankIdx++) {
             const row = rows[rankIdx];
             let fileIdx = 0;
             for (const ch of row) {
@@ -898,39 +741,29 @@
                     fileIdx += parseInt(ch, 10);
                     continue;
                 }
-                if (fileIdx < 0 || fileIdx > 7) return null;
                 const color = (ch === ch.toUpperCase()) ? 'w' : 'b';
                 const square = `${files[fileIdx]}${8 - rankIdx}`;
                 board[square] = { color: color, piece: ch.toLowerCase() };
-                fileIdx += 1;
+                fileIdx++;
             }
-            if (fileIdx !== 8) return null;
         }
-        return {
-            board: board,
-            sideToMove: parts[1] === 'b' ? 'b' : 'w'
-        };
+        return { board: board, sideToMove: parts[1] === 'b' ? 'b' : 'w' };
     }
-
+    
     function validateMoveAgainstFen(move, fen, expectedTurn = null) {
-        if (!move || typeof move !== 'string' || move.length < 4) return false;
+        if (!move || move.length < 4) return false;
         const from = move.substring(0, 2).toLowerCase();
         const to = move.substring(2, 4).toLowerCase();
         if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return false;
-
         const parsed = parseBoardFromFen(fen);
         if (!parsed) return false;
-
-        const sourcePiece = parsed.board[from] || null;
+        const sourcePiece = parsed.board[from];
         if (!sourcePiece) return false;
-
-        const targetPiece = parsed.board[to] || null;
         const activeTurn = (expectedTurn === 'w' || expectedTurn === 'b') ? expectedTurn : parsed.sideToMove;
         if (sourcePiece.color !== activeTurn) return false;
-        if (targetPiece && sourcePiece.color === targetPiece.color) return false;
         return true;
     }
-
+    
     function resolveSafeMoveForFen(fallbackMove, fen, currentTurn) {
         if (lastPvMoves && lastPvMoves.length > 0) {
             for (const pvMove of lastPvMoves) {
@@ -940,61 +773,34 @@
         if (validateMoveAgainstFen(fallbackMove, fen, currentTurn)) return fallbackMove;
         return null;
     }
-
+    
     function updateTurnDisplay(currentTurn) {
         const turnEl = document.getElementById('turn-display');
         if (!turnEl) return;
-        if (currentTurn === 'w') {
-            turnEl.innerText = "⬜ Trắng đi";
-            turnEl.style.color = "#fff";
-        } else if (currentTurn === 'b') {
-            turnEl.innerText = "⬛ Đen đi";
-            turnEl.style.color = "#888";
-        } else {
-            turnEl.innerText = "-";
-            turnEl.style.color = "#c084fc";
-        }
+        if (currentTurn === 'w') turnEl.innerText = "⬜ Trắng đi";
+        else if (currentTurn === 'b') turnEl.innerText = "⬛ Đen đi";
+        else turnEl.innerText = "-";
     }
-
-    // --- BOARD & FEN DETECTION ---
+    
+    // --- BOARD DETECTION ---
     function getActiveBoardElement() {
         const boards = Array.from(document.querySelectorAll('chess-board, wc-chess-board'));
         if (!boards.length) return null;
-        if (boards.length === 1) return boards[0];
-        let bestBoard = null;
-        let bestScore = -1;
-        for (const board of boards) {
-            if (!board || !board.isConnected) continue;
-            const rect = board.getBoundingClientRect();
-            const area = Math.max(0, rect.width) * Math.max(0, rect.height);
-            const isVisible = rect.width > 120 && rect.height > 120;
-            if (!isVisible) continue;
-            const zIndex = parseInt(window.getComputedStyle(board).zIndex || "0", 10) || 0;
-            const score = area + (zIndex > 0 ? zIndex : 0);
-            if (score > bestScore) {
-                bestScore = score;
-                bestBoard = board;
-            }
-        }
-        return bestBoard || boards[0];
+        return boards[0];
     }
-
+    
     function getPieceAt(board, square) {
-        if (!board || !square || !/^[a-h][1-8]$/i.test(square)) return null;
+        if (!board || !square) return null;
         const file = square.toLowerCase().charCodeAt(0) - 96;
         const rank = parseInt(square[1], 10);
-        const selector = `.piece.square-${file}${rank}`;
-        const pieceEl = board.querySelector(selector);
+        const pieceEl = board.querySelector(`.piece.square-${file}${rank}`);
         if (!pieceEl) return null;
         const className = pieceEl.className || "";
         const pieceMatch = className.match(/\bpiece\s+([wb])([prnbqk])\b/i);
         if (!pieceMatch) return null;
-        return {
-            color: pieceMatch[1].toLowerCase(),
-            piece: pieceMatch[2].toLowerCase()
-        };
+        return { color: pieceMatch[1].toLowerCase(), piece: pieceMatch[2].toLowerCase() };
     }
-
+    
     function isSelfCaptureMove(move, board) {
         if (!move || move.length < 4) return true;
         const from = move.substring(0, 2).toLowerCase();
@@ -1005,167 +811,96 @@
         if (targetPiece && sourcePiece.color === targetPiece.color) return true;
         return false;
     }
-
+    
     function buildBoardPartFromDom(board) {
         if (!board) return null;
         const grid = Array.from({ length: 8 }, () => Array(8).fill(null));
-        const pieceNodes = board.querySelectorAll('.piece, [data-piece], [class*="square-"]');
-        if (!pieceNodes || pieceNodes.length === 0) return null;
-
-        for (const node of pieceNodes) {
-            const className = (node.className || "").toString();
-            const dataSquare = (node.getAttribute?.('data-square') || "").toLowerCase();
-            const squareClass = className.match(/square-(\d)(\d)/);
-            let file = null;
-            let rank = null;
-            if (/^[a-h][1-8]$/.test(dataSquare)) {
-                file = dataSquare.charCodeAt(0) - 96;
-                rank = parseInt(dataSquare[1], 10);
-            } else if (squareClass) {
-                file = parseInt(squareClass[1], 10);
-                rank = parseInt(squareClass[2], 10);
-            }
-            if (!file || !rank || file < 1 || file > 8 || rank < 1 || rank > 8) continue;
-
-            const pieceClass = className.match(/\b([wb])([prnbqk])\b/i);
-            const dataPiece = (node.getAttribute?.('data-piece') || "").toLowerCase();
-            let color = null;
-            let piece = null;
-            if (pieceClass) {
-                color = pieceClass[1].toLowerCase();
-                piece = pieceClass[2].toLowerCase();
-            } else if (/^[wb][prnbqk]$/.test(dataPiece)) {
-                color = dataPiece[0];
-                piece = dataPiece[1];
-            }
-            if (!color || !piece) continue;
-
-            const fenPiece = color === 'w' ? piece.toUpperCase() : piece.toLowerCase();
+        const pieces = board.querySelectorAll('.piece');
+        for (const piece of pieces) {
+            const squareMatch = piece.className.match(/square-(\d)(\d)/);
+            if (!squareMatch) continue;
+            const file = parseInt(squareMatch[1], 10);
+            const rank = parseInt(squareMatch[2], 10);
+            const pieceMatch = piece.className.match(/piece ([wb])([prnbqk])/i);
+            if (!pieceMatch) continue;
+            const color = pieceMatch[1].toLowerCase();
+            const pieceType = pieceMatch[2].toLowerCase();
+            const fenPiece = color === 'w' ? pieceType.toUpperCase() : pieceType;
             const row = 8 - rank;
             const col = file - 1;
             grid[row][col] = fenPiece;
         }
-
         const rows = [];
-        for (let r = 0; r < 8; r += 1) {
+        for (let r = 0; r < 8; r++) {
             let rowFen = "";
             let empty = 0;
-            for (let c = 0; c < 8; c += 1) {
+            for (let c = 0; c < 8; c++) {
                 const p = grid[r][c];
-                if (!p) {
-                    empty += 1;
-                } else {
-                    if (empty > 0) {
-                        rowFen += String(empty);
-                        empty = 0;
-                    }
+                if (!p) empty++;
+                else {
+                    if (empty > 0) { rowFen += empty; empty = 0; }
                     rowFen += p;
                 }
             }
-            if (empty > 0) rowFen += String(empty);
+            if (empty > 0) rowFen += empty;
             rows.push(rowFen || "8");
         }
-        const boardPart = rows.join('/');
-        return boardPart.split('/').length === 8 ? boardPart : null;
+        return rows.join('/');
     }
-
-    function detectTurnFromLiveUiFallback() {
-        const whiteTurnClock = document.querySelector('.clock-player-white.clock-player-turn, .clock-white.clock-player-turn, [data-player-color="white"].clock-player-turn');
-        if (whiteTurnClock) return 'w';
-        const blackTurnClock = document.querySelector('.clock-player-black.clock-player-turn, .clock-black.clock-player-turn, [data-player-color="black"].clock-player-turn');
-        if (blackTurnClock) return 'b';
-        return getCurrentTurnFromFen(lastFen) || 'w';
+    
+    function detectTurnFromUi() {
+        const whiteTurn = document.querySelector('.clock-player-white.clock-player-turn, [data-player-color="white"].clock-player-turn');
+        if (whiteTurn) return 'w';
+        const blackTurn = document.querySelector('.clock-player-black.clock-player-turn, [data-player-color="black"].clock-player-turn');
+        if (blackTurn) return 'b';
+        return 'w';
     }
-
+    
     function getCurrentFenFromBoard() {
         const board = getActiveBoardElement();
         if (!board) return null;
-        
         const attrFen = board.getAttribute('data-fen') || board.getAttribute('fen');
         if (attrFen) {
-            const normalized = normalizeFen(attrFen);
-            if (normalized) return normalized;
+            const norm = normalizeFen(attrFen);
+            if (norm) return norm;
         }
-        
         const boardPart = buildBoardPartFromDom(board);
         if (boardPart) {
-            const turn = detectTurnFromLiveUiFallback();
+            const turn = detectTurnFromUi();
             return normalizeFen(`${boardPart} ${turn} - - 0 1`);
         }
-        
         return null;
     }
-
+    
     function detectPlayerColor() {
         const board = getActiveBoardElement();
         if (!board) return playerColor;
-
         const orientation = (board.getAttribute('orientation') || "").toLowerCase();
         if (orientation === "black") return "b";
         if (orientation === "white") return "w";
-
         if (board.classList.contains('flipped')) return "b";
-
-        if (board.dataset.orientation === "black") return "b";
-        if (board.dataset.orientation === "white") return "w";
-
-        if (document.querySelector('.board-layout-player-bottom.black')) return "b";
-        if (document.querySelector('.board-layout-player-bottom.white')) return "w";
-
-        try {
-            if (unsafeWindow.game && typeof unsafeWindow.game.getOurColor === 'function') {
-                const color = unsafeWindow.game.getOurColor();
-                if (color === 'w' || color === 'b') return color;
-            }
-        } catch (e) {}
-
-        const pieces = board.querySelectorAll('.piece');
-        let bottomRowColor = null;
-        pieces.forEach(p => {
-            const squareMatch = p.className.match(/square-(\d)(\d)/);
-            if (squareMatch) {
-                const row = parseInt(squareMatch[2]);
-                const pieceMatch = p.className.match(/piece ([wb])/);
-                if (pieceMatch) {
-                    if (row === 1 && !bottomRowColor) bottomRowColor = pieceMatch[1];
-                }
-            }
-        });
-        
-        if (bottomRowColor === 'w') return 'w';
-        if (bottomRowColor === 'b') return 'b';
-
-        return playerColor;
+        return "w";
     }
-
-    // --- COORDINATE CONVERSION ---
+    
+    // --- COORDINATES ---
     function squareToCoords(s, b) {
         const f = s.charCodeAt(0)-97, r = parseInt(s[1])-1;
-        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
-        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        const isFlipped = b.classList.contains('flipped') || b.getAttribute('orientation') === 'black';
         let x = isFlipped ? (7-f) : f, y = isFlipped ? r : (7-r);
         return { x: x*100+50, y: y*100+50 };
     }
-
+    
     function squareToPercent(s, b) {
-        if (!s || s.length < 2) return null;
-        const f = s.charCodeAt(0)-97;
-        const r = parseInt(s[1], 10)-1;
-        if (f < 0 || f > 7 || Number.isNaN(r) || r < 0 || r > 7) return null;
-        const orientation = (b.getAttribute('orientation') || "").toLowerCase();
-        const isFlipped = b.classList.contains('flipped') || orientation === 'black';
+        const f = s.charCodeAt(0)-97, r = parseInt(s[1])-1;
+        const isFlipped = b.classList.contains('flipped') || b.getAttribute('orientation') === 'black';
         const x = isFlipped ? (7-f) : f;
         const y = isFlipped ? r : (7-r);
-        return {
-            leftPercent: x * 12.5,
-            topPercent: y * 12.5
-        };
+        return { leftPercent: x * 12.5, topPercent: y * 12.5 };
     }
-
+    
     // --- ARROW DRAWING ---
     function drawMoveArrows(primaryMove, secondaryMove, options = {}) {
         if (!showArrows) return;
-        
         const oldLayer = document.getElementById('noir-arrow-layer');
         if (oldLayer) oldLayer.remove();
         
@@ -1175,39 +910,23 @@
         setTimeout(() => {
             const freshBoard = getActiveBoardElement();
             if (!freshBoard) return;
-            
             if (!primaryMove && !secondaryMove) return;
-            
-            const testMove = primaryMove || secondaryMove;
-            if (testMove && testMove.length >= 4) {
-                const from = testMove.substring(0,2);
-                const to = testMove.substring(2,4);
-                const fC = squareToCoords(from, freshBoard);
-                const tC = squareToCoords(to, freshBoard);
-                if (!fC || !tC) return;
-            }
             
             const layer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             layer.id = "noir-arrow-layer";
             layer.setAttribute("viewBox", "0 0 800 800");
-            layer.style.position = 'absolute';
-            layer.style.top = '0';
-            layer.style.left = '0';
-            layer.style.width = '100%';
-            layer.style.height = '100%';
-            layer.style.pointerEvents = 'none';
-            layer.style.zIndex = '10000';
+            layer.style.cssText = "position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:10000;";
             
             layer.innerHTML = `<defs>
-                <marker id="noir-arrowhead-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                <marker id="noir-arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
                     <path d="M0,0 L0,8 L8,4 Z" fill="rgba(168,85,247,0.95)"/>
                 </marker>
-                <marker id="noir-arrowhead-red" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                <marker id="noir-arrow-red" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
                     <path d="M0,0 L0,8 L8,4 Z" fill="rgba(248,113,113,0.95)"/>
                 </marker>
             </defs>`;
             
-            const appendArrow = (move, color, markerId, width, isPromotionArrow = false) => {
+            const appendArrow = (move, color, markerId, width, isPromo = false) => {
                 if (!move || move.length < 4) return;
                 const from = move.substring(0,2);
                 const to = move.substring(2,4);
@@ -1216,210 +935,117 @@
                 const tC = squareToCoords(to, freshBoard);
                 if (!fC || !tC) return;
                 const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("class", "best-move-arrow");
-                line.setAttribute("x1", String(fC.x));
-                line.setAttribute("y1", String(fC.y));
-                line.setAttribute("x2", String(tC.x));
-                line.setAttribute("y2", String(tC.y));
+                line.setAttribute("x1", fC.x);
+                line.setAttribute("y1", fC.y);
+                line.setAttribute("x2", tC.x);
+                line.setAttribute("y2", tC.y);
                 line.setAttribute("stroke", color);
-                line.setAttribute("stroke-width", String(width));
+                line.setAttribute("stroke-width", width);
                 line.setAttribute("stroke-linecap", "round");
                 line.setAttribute("stroke-dasharray", "1000");
                 line.setAttribute("stroke-dashoffset", "1000");
                 line.setAttribute("marker-end", `url(#${markerId})`);
-                if (isPromotionArrow) {
-                    line.classList.add("promo-neon");
-                }
+                if (isPromo) line.classList.add("promo-neon");
                 layer.appendChild(line);
-                void line.offsetHeight;
-                line.style.strokeDashoffset = "0";
+                setTimeout(() => { if(line) line.style.strokeDashoffset = "0"; }, 10);
             };
             
-            appendArrow(secondaryMove, "rgba(248,113,113,0.85)", "noir-arrowhead-red", 10);
-            appendArrow(primaryMove, "rgba(168,85,247,0.95)", "noir-arrowhead-green", 14, !!options.primaryPromotion);
+            appendArrow(secondaryMove, "rgba(248,113,113,0.85)", "noir-arrow-red", 10);
+            appendArrow(primaryMove, "rgba(168,85,247,0.95)", "noir-arrow-green", 14, !!options.primaryPromotion);
             
-            if (getComputedStyle(freshBoard).position === 'static') {
-                freshBoard.style.position = 'relative';
-            }
-            
+            if (getComputedStyle(freshBoard).position === 'static') freshBoard.style.position = 'relative';
             freshBoard.appendChild(layer);
             
             if (options.primaryPromotion && primaryMove && primaryMove.length >= 4) {
-                showPromotionSquareEffect(freshBoard, primaryMove.substring(2, 4));
+                const target = squareToPercent(primaryMove.substring(2,4), freshBoard);
+                if (target) {
+                    const burst = document.createElement('div');
+                    burst.className = 'noir-promotion-burst';
+                    burst.style.left = target.leftPercent + '%';
+                    burst.style.top = target.topPercent + '%';
+                    const ring = document.createElement('div');
+                    ring.className = 'noir-promotion-ring';
+                    ring.style.left = target.leftPercent + '%';
+                    ring.style.top = target.topPercent + '%';
+                    freshBoard.appendChild(ring);
+                    freshBoard.appendChild(burst);
+                    setTimeout(() => { burst.remove(); ring.remove(); }, 400);
+                }
             }
-        }, 50);
+        }, 30);
     }
-
-    function showPromotionSquareEffect(board, square) {
-        const target = squareToPercent(square, board);
-        if (!target) return;
-        const burst = document.createElement('div');
-        burst.className = 'noir-promotion-burst';
-        burst.style.left = `${target.leftPercent}%`;
-        burst.style.top = `${target.topPercent}%`;
-
-        const ring = document.createElement('div');
-        ring.className = 'noir-promotion-ring';
-        ring.style.left = `${target.leftPercent}%`;
-        ring.style.top = `${target.topPercent}%`;
-
-        board.appendChild(ring);
-        board.appendChild(burst);
-
-        const cx = target.leftPercent + 6.25;
-        const cy = target.topPercent + 6.25;
-        for (let i = 0; i < 8; i += 1) {
-            const particle = document.createElement('div');
-            const angle = (Math.PI * 2 * i) / 8;
-            const distance = 12 + (i % 3) * 4;
-            particle.className = 'noir-promotion-particle';
-            particle.style.left = `${cx}%`;
-            particle.style.top = `${cy}%`;
-            particle.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
-            particle.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
-            board.appendChild(particle);
-            setTimeout(() => particle.remove(), 650);
-        }
-
-        setTimeout(() => {
-            burst.remove();
-            ring.remove();
-        }, 700);
-    }
-
+    
     // --- ANALYSIS ---
     function resetAnalysis() {
-        resetRuntimeState("manual-scan");
-        if (analyzeTimeoutId) {
-            clearTimeout(analyzeTimeoutId);
-            analyzeTimeoutId = null;
-        }
-        activeAnalyzeToken += 1;
+        resetRuntimeState("manual");
+        if (analyzeTimeoutId) clearTimeout(analyzeTimeoutId);
+        activeAnalyzeToken++;
         updateStatus("🔎 Đang quét...");
         const btn = document.getElementById('force-analyze');
         if (btn) btn.classList.add('scanning');
         const fen = normalizeFen(getCurrentFenFromBoard());
-        if (fen) {
-            analyzeCurrentPosition();
-        } else {
-            if (btn) btn.classList.remove('scanning');
-            updateStatus("❌ Không đọc được bàn cờ");
-        }
+        if (fen) analyzeCurrentPosition();
+        else { if (btn) btn.classList.remove('scanning'); updateStatus("❌ Không đọc được bàn cờ"); }
     }
-
+    
     function analyzeCurrentPosition() {
         if (!engine || !isScriptEnabled) return;
-        
         const fen = normalizeFen(getCurrentFenFromBoard());
-        if (!fen) {
-            updateStatus("❌ Lỗi bàn cờ!");
-            const btn = document.getElementById('force-analyze');
-            if (btn) btn.classList.remove('scanning');
-            return;
-        }
-        
-        if (fen === lastFen) {
-            updateStatus("✅ Đã quét xong");
-            const btn = document.getElementById('force-analyze');
-            if (btn) btn.classList.remove('scanning');
-            return;
-        }
+        if (!fen) { updateStatus("❌ Lỗi bàn cờ!"); return; }
+        if (fen === lastFen) { updateStatus("✅ Đã quét xong"); return; }
         
         playerColor = detectPlayerColor();
         const currentTurn = getCurrentTurnFromFen(fen);
-        if (!currentTurn) {
-            updateStatus("⚠️ Không đọc được lượt đi");
-            const btn = document.getElementById('force-analyze');
-            if (btn) btn.classList.remove('scanning');
-            return;
-        }
+        if (!currentTurn) { updateStatus("⚠️ Không đọc được lượt đi"); return; }
         
         lastFen = fen;
         lastAnalyzedTurn = currentTurn;
-        updateStatus("🧠 Đang tính toán...");
+        updateStatus("🧠 Đang tính...");
         
         engine.postMessage('stop');
         engine.postMessage(`position fen ${fen}`);
-        engine.postMessage(`go movetime 800 depth 22`);
+        engine.postMessage(`go movetime 600 depth 20`);
         
         if (analyzeTimeoutId) clearTimeout(analyzeTimeoutId);
         analyzeTimeoutId = setTimeout(() => {
             analyzeTimeoutId = null;
-            updateStatus("⚠️ Quét timeout, thử lại");
+            updateStatus("⚠️ Quét timeout");
             const btn = document.getElementById('force-analyze');
             if (btn) btn.classList.remove('scanning');
-        }, 10000);
+        }, 8000);
     }
-
+    
     function handleBestMove(m) {
-        if (analyzeTimeoutId) {
-            clearTimeout(analyzeTimeoutId);
-            analyzeTimeoutId = null;
-        }
+        if (analyzeTimeoutId) { clearTimeout(analyzeTimeoutId); analyzeTimeoutId = null; }
         const btn = document.getElementById('force-analyze');
         if (btn) btn.classList.remove('scanning');
+        if (!m || m === "(none)" || !isScriptEnabled) { updateStatus("⚠️ Không có nước đi"); return; }
         
-        if(!m || m==="(none)" || !isScriptEnabled) {
-            updateStatus("⚠️ Không có nước đi hợp lệ");
-            return;
-        }
-
         playerColor = detectPlayerColor();
         const latestFen = normalizeFen(getCurrentFenFromBoard());
         const currentTurn = latestFen ? getCurrentTurnFromFen(latestFen) : null;
-        
-        if (!currentTurn) {
-            clearArrows();
-            hideBestMoveText();
-            updateStatus("⏳ Đang chờ đối thủ...");
-            return;
-        }
+        if (!currentTurn) { clearArrows(); updateStatus("⏳ Đang chờ..."); return; }
         
         const safeMove = latestFen ? resolveSafeMoveForFen(m, latestFen, currentTurn) : null;
-        if (!safeMove) {
-            lastBestMove = "";
-            clearArrows();
-            hideBestMoveText();
-            updateStatus("⚠️ Bỏ qua nước đi không hợp lệ");
-            return;
-        }
-
+        if (!safeMove) { lastBestMove = ""; clearArrows(); updateStatus("⚠️ Nước đi không hợp lệ"); return; }
+        
         lastBestMove = safeMove;
+        const parsed = parsePromotionMove(safeMove);
         const bestMoveEl = document.getElementById('best-move-text');
-        const bestMoveMetaEl = document.getElementById('best-move-meta');
-        const parsedBestMove = parsePromotionMove(safeMove);
-        if (bestMoveEl) {
-            bestMoveEl.innerText = parsedBestMove.display;
-            bestMoveEl.classList.toggle('promotion-highlight', !!parsedBestMove.promotion);
-        }
-        if (bestMoveMetaEl) {
-            bestMoveMetaEl.innerText = parsedBestMove.promotion ? `${parsedBestMove.icon} ${parsedBestMove.promotionLabel}` : "";
-            bestMoveMetaEl.classList.toggle('promotion-meta', !!parsedBestMove.promotion);
-        }
+        const metaEl = document.getElementById('best-move-meta');
+        if (bestMoveEl) bestMoveEl.innerText = parsed.display;
+        if (metaEl) metaEl.innerHTML = parsed.promotion ? `${parsed.icon} ${parsed.promotionLabel}` : "";
         
         updateTurnDisplay(currentTurn);
-        
         const colorEl = document.getElementById('player-color-display');
-        if (playerColor === 'w') {
-            colorEl.innerText = "⬜ Quân Trắng";
-            colorEl.style.color = "#fff";
-        } else if (playerColor === 'b') {
-            colorEl.innerText = "⬛ Quân Đen";
-            colorEl.style.color = "#888";
-        }
-
-        if (currentTurn !== playerColor) {
-            clearArrows();
-            hideBestMoveText();
-            updateStatus("⏳ Đang chờ đối thủ...");
-            return;
-        }
-
-        updateStatus("✨ Đến lượt bạn!");
+        if (playerColor === 'w') colorEl.innerText = "⬜ Quân Trắng";
+        else if (playerColor === 'b') colorEl.innerText = "⬛ Quân Đen";
         
-        // DEBOUNCE: Chờ 500ms trước khi vẽ, nếu có move mới hơn thì thay thế
+        if (currentTurn !== playerColor) { clearArrows(); updateStatus("⏳ Đang chờ..."); return; }
+        
+        updateStatus("✨ Đến lượt bạn!");
         if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
-        pendingArrowMove = { move: safeMove, promotion: parsedBestMove.promotion };
+        pendingArrowMove = { move: safeMove, promotion: parsed.promotion };
         arrowDebounceTimer = setTimeout(() => {
             if (pendingArrowMove && showArrows && pendingArrowMove.move === lastBestMove) {
                 clearArrows();
@@ -1428,95 +1054,73 @@
                 pendingArrowMove = null;
             }
             arrowDebounceTimer = null;
-        }, 500);
+        }, 400);
     }
-
+    
     // --- MAIN LOOP ---
+    createFloatButton();
+    createPanel();
+    loadSettings();
+    initEngine();
+    
     setInterval(() => {
         const board = getActiveBoardElement();
-        const gui = document.getElementById('noir-gui');
         if (board) {
-            if (!gui) { 
-                createGUI(); 
-                initEngine(); 
-                playerColor = detectPlayerColor();
-                const colorEl = document.getElementById('player-color-display');
-                if (playerColor === 'w') {
-                    colorEl.innerText = "⬜ Quân Trắng";
-                    colorEl.style.color = "#fff";
-                } else if (playerColor === 'b') {
-                    colorEl.innerText = "⬛ Quân Đen";
-                    colorEl.style.color = "#888";
+            if (isScriptEnabled) {
+                const liveFen = normalizeFen(getCurrentFenFromBoard());
+                const liveBoardPart = getFenBoardPart(liveFen);
+                
+                if (liveBoardPart === START_POSITION_BOARD_FEN && lastObservedBoardFenPart && lastObservedBoardFenPart !== START_POSITION_BOARD_FEN) {
+                    resetRuntimeState("new-game");
                 }
-            } else {
-                gui.style.display = 'block';
-                if (isScriptEnabled) {
-                    const liveFen = normalizeFen(getCurrentFenFromBoard());
-                    const liveBoardPart = getFenBoardPart(liveFen);
-
-                    if (liveBoardPart === START_POSITION_BOARD_FEN && lastObservedBoardFenPart && lastObservedBoardFenPart !== START_POSITION_BOARD_FEN) {
-                        resetRuntimeState("new-game-detected");
-                    }
-                    if (liveBoardPart) lastObservedBoardFenPart = liveBoardPart;
-
-                    const currentColor = detectPlayerColor();
-                    if (currentColor && currentColor !== playerColor) {
-                        playerColor = currentColor;
-                        const colorEl = document.getElementById('player-color-display');
-                        if (playerColor === 'w') {
-                            colorEl.innerText = "⬜ Quân Trắng";
-                            colorEl.style.color = "#fff";
-                        } else if (playerColor === 'b') {
-                            colorEl.innerText = "⬛ Quân Đen";
-                            colorEl.style.color = "#888";
+                if (liveBoardPart) lastObservedBoardFenPart = liveBoardPart;
+                
+                const currentColor = detectPlayerColor();
+                if (currentColor && currentColor !== playerColor) {
+                    playerColor = currentColor;
+                    const colorEl = document.getElementById('player-color-display');
+                    if (playerColor === 'w') colorEl.innerText = "⬜ Quân Trắng";
+                    else if (playerColor === 'b') colorEl.innerText = "⬛ Quân Đen";
+                }
+                
+                if (liveFen && liveFen !== lastAnalyzedFen) {
+                    lastAnalyzedFen = liveFen;
+                    if (autoAnalyze) analyzeCurrentPosition();
+                }
+                
+                if (liveFen) {
+                    const liveTurn = getCurrentTurnFromFen(liveFen);
+                    updateTurnDisplay(liveTurn);
+                    if (liveTurn === playerColor) updateStatus("✨ Đến lượt bạn!");
+                    else updateStatus("⏳ Đang chờ đối thủ...");
+                }
+                
+                if (showArrows && liveFen && lastBestMove && (liveFen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
+                    const liveTurn = getCurrentTurnFromFen(liveFen);
+                    if (liveTurn === playerColor && lastBestMove && lastRenderedMove !== lastBestMove) {
+                        const safeMove = resolveSafeMoveForFen(lastBestMove, liveFen, liveTurn);
+                        if (safeMove && safeMove !== lastRenderedMove) {
+                            if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
+                            const parsed = parsePromotionMove(safeMove);
+                            pendingArrowMove = { move: safeMove, promotion: parsed.promotion };
+                            arrowDebounceTimer = setTimeout(() => {
+                                if (pendingArrowMove && showArrows) {
+                                    clearArrows();
+                                    drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
+                                    lastRenderedMove = pendingArrowMove.move;
+                                    pendingArrowMove = null;
+                                }
+                                arrowDebounceTimer = null;
+                            }, 400);
                         }
-                    }
-                    
-                    const fen = liveFen;
-                    if (fen && fen !== lastAnalyzedFen) {
-                        lastAnalyzedFen = fen;
-                        if (autoAnalyze) analyzeCurrentPosition();
-                    }
-
-                    if (fen) {
-                        const liveTurn = getCurrentTurnFromFen(fen);
-                        updateTurnDisplay(liveTurn);
-                        if (liveTurn === playerColor) {
-                            updateStatus("✨ Đến lượt bạn!");
-                        } else {
-                            updateStatus("⏳ Đang chờ đối thủ...");
-                        }
-                    }
-                    
-                    if (showArrows && fen && lastBestMove && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
-                        const liveTurn = getCurrentTurnFromFen(fen);
-                        if (liveTurn === playerColor && lastBestMove && lastRenderedMove !== lastBestMove) {
-                            const safeLiveMove = resolveSafeMoveForFen(lastBestMove, fen, liveTurn);
-                            if (safeLiveMove && safeLiveMove !== lastRenderedMove) {
-                                if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
-                                const parsedMove = parsePromotionMove(safeLiveMove);
-                                pendingArrowMove = { move: safeLiveMove, promotion: parsedMove.promotion };
-                                arrowDebounceTimer = setTimeout(() => {
-                                    if (pendingArrowMove && showArrows) {
-                                        clearArrows();
-                                        drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
-                                        lastRenderedMove = pendingArrowMove.move;
-                                        pendingArrowMove = null;
-                                    }
-                                    arrowDebounceTimer = null;
-                                }, 500);
-                            }
-                            lastRenderedFenForArrows = fen;
-                        } else if (liveTurn !== playerColor) {
-                            clearArrows();
-                            lastRenderedFenForArrows = fen;
-                            lastRenderedMove = "";
-                        }
+                        lastRenderedFenForArrows = liveFen;
+                    } else if (liveTurn !== playerColor) {
+                        clearArrows();
+                        lastRenderedFenForArrows = liveFen;
+                        lastRenderedMove = "";
                     }
                 }
             }
-        } else if (gui) {
-            gui.style.display = 'none';
         }
     }, 300);
 })();
