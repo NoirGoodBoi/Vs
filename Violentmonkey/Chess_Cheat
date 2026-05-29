@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess Noir
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
 // @author       Noir
 // @match        *://www.chess.com/*
@@ -55,12 +55,19 @@
     function loadSettings() {
         try {
             const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-            if (saved.floatTop) document.getElementById('noir-float-btn')?.style.setProperty('top', saved.floatTop + 'px', 'important');
-            if (saved.floatLeft) document.getElementById('noir-float-btn')?.style.setProperty('left', saved.floatLeft + 'px', 'important');
-            if (saved.floatRight) document.getElementById('noir-float-btn')?.style.setProperty('right', saved.floatRight + 'px', 'important');
-            if (saved.floatBottom) document.getElementById('noir-float-btn')?.style.setProperty('bottom', saved.floatBottom + 'px', 'important');
-            if (saved.panelTop) document.getElementById('noir-panel')?.style.setProperty('top', saved.panelTop + 'px', 'important');
-            if (saved.panelLeft) document.getElementById('noir-panel')?.style.setProperty('left', saved.panelLeft + 'px', 'important');
+            const floatBtn = document.getElementById('noir-float-btn');
+            const panel = document.getElementById('noir-panel');
+            if (floatBtn) {
+                if (saved.floatTop) floatBtn.style.top = saved.floatTop + 'px';
+                if (saved.floatLeft) floatBtn.style.left = saved.floatLeft + 'px';
+                if (saved.floatRight) floatBtn.style.right = saved.floatRight + 'px';
+                if (saved.floatBottom) floatBtn.style.bottom = saved.floatBottom + 'px';
+            }
+            if (panel) {
+                if (saved.panelTop) panel.style.top = saved.panelTop + 'px';
+                if (saved.panelLeft) panel.style.left = saved.panelLeft + 'px';
+                panel.style.transform = 'none';
+            }
             return saved;
         } catch(e) { return {}; }
     }
@@ -73,7 +80,7 @@
         } catch(e) {}
     }
 
-    // --- STYLES (không animation) ---
+    // --- STYLES ---
     GM_addStyle(`
         #noir-float-btn {
             position: fixed !important;
@@ -100,7 +107,7 @@
             top: 50% !important;
             left: 50% !important;
             width: 340px !important;
-            background: linear-gradient(160deg, rgba(7,20,32,0.95), rgba(12,33,44,0.95)) !important;
+            background: linear-gradient(160deg, rgba(7,20,32,0.98), rgba(12,33,44,0.98)) !important;
             backdrop-filter: blur(18px) !important;
             border: 1px solid rgba(180,130,255,0.4) !important;
             border-radius: 18px !important;
@@ -108,7 +115,7 @@
             color: white !important;
             font-family: 'Segoe UI', 'Space Grotesk', sans-serif !important;
             z-index: 2147483646 !important;
-            display: none !important;
+            display: block !important;
             overflow: hidden !important;
         }
         
@@ -317,13 +324,6 @@
             border: 2px solid rgba(168,85,247,0.8);
             animation: promo-ring 0.4s ease-out forwards;
         }
-        .noir-promotion-particle {
-            width: 5px;
-            height: 5px;
-            border-radius: 50%;
-            background: rgba(168,85,247,0.9);
-            animation: promo-particle 0.4s ease-out forwards;
-        }
         @keyframes promo-fade {
             0% { opacity: 0.5; transform: scale(0.9); }
             100% { opacity: 0; transform: scale(1.1); }
@@ -331,10 +331,6 @@
         @keyframes promo-ring {
             0% { opacity: 0.8; transform: scale(0.9); }
             100% { opacity: 0; transform: scale(1.6); }
-        }
-        @keyframes promo-particle {
-            0% { opacity: 1; transform: translate(0,0) scale(1); }
-            100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
         }
     `);
 
@@ -345,25 +341,6 @@
         const btn = document.createElement('div');
         btn.id = 'noir-float-btn';
         btn.innerHTML = '♞';
-        btn.style.cssText = `
-            position: fixed;
-            right: 20px;
-            bottom: 100px;
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #8b5cf6, #a855f7);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 28px;
-            cursor: pointer;
-            z-index: 2147483647;
-            box-shadow: 0 0 15px rgba(139, 92, 246, 0.5);
-            user-select: none;
-            touch-action: none;
-            font-family: 'Segoe UI', sans-serif;
-        `;
         document.body.appendChild(btn);
         
         // Drag float button
@@ -471,6 +448,9 @@
             </div>
         `;
         document.body.appendChild(panel);
+        
+        // Ban đầu ẩn panel
+        panel.style.display = 'none';
         
         // Drag panel
         const header = document.getElementById('noir-panel-header');
@@ -1057,12 +1037,13 @@
         }, 400);
     }
     
-    // --- MAIN LOOP ---
+    // --- KHỞI TẠO ---
     createFloatButton();
     createPanel();
     loadSettings();
     initEngine();
     
+    // --- MAIN LOOP ---
     setInterval(() => {
         const board = getActiveBoardElement();
         if (board) {
