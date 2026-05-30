@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      12.0
-// @description  Random truyện vi-hentai + Auto hop chap
+// @version      13.0
+// @description  Random truyện + random chap
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
 (function () {
@@ -13,6 +13,7 @@
 
     const STORAGE_KEY = "vih_random_stories";
     const SETTINGS_KEY = "vih_hop_settings";
+    const CHAPTER_CACHE = new Map();
 
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 
@@ -264,7 +265,7 @@
             if (count >= 20) {
                 clearInterval(interval);
                 const final = stories[Math.floor(Math.random() * stories.length)];
-                resultBox.innerHTML = `<div><div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div><a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở chap truyện</a></div>`;
+                resultBox.innerHTML = `<div><div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div><a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở truyện</a></div>`;
             }
         }, 80);
     });
@@ -303,8 +304,45 @@
     }
 
     // =========================
-    // HOP LOGIC - MỞ TRANG TRUYỆN RỒI TỰ ĐỘNG CLICK VÀO CHAP
+    // HOP LOGIC - LẤY SỐ CHAP TỪ URL
     // =========================
+    function getChapterCount(storyUrl) {
+        return new Promise((resolve) => {
+            if (CHAPTER_CACHE.has(storyUrl)) {
+                resolve(CHAPTER_CACHE.get(storyUrl));
+                return;
+            }
+
+            // Lấy trang truyện để đếm số chap
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: storyUrl,
+                onload: function(response) {
+                    const html = response.responseText;
+                    // Tìm tất cả link chap
+                    const matches = html.match(/\/doc-truyen\/[^"'\s]+/g);
+                    let count = matches ? matches.length : 1;
+                    
+                    // Thử pattern khác nếu không thấy
+                    if (count === 1 && !html.includes('/doc-truyen/')) {
+                        const chapMatch = html.match(/chap-(\d+)/g);
+                        if (chapMatch) {
+                            const numbers = chapMatch.map(m => parseInt(m.split('-')[1])).filter(n => !isNaN(n));
+                            count = Math.max(...numbers, 1);
+                        }
+                    }
+                    
+                    CHAPTER_CACHE.set(storyUrl, count);
+                    resolve(count);
+                },
+                onerror: function() {
+                    resolve(1);
+                }
+            });
+        });
+    }
+
+    // HOP: VÀO TRUYỆN NGẪU NHIÊN + CHAP NGẪU NHIÊN
     let isHopRunning = false;
     let currentHopCount = 0;
     let currentTimeout = null;
@@ -319,40 +357,7 @@
         maxHopDisplay.innerText = hopSettings.maxHop;
     }
 
-    // Hàm mở truyện và tự động click vào chap ngẫu nhiên
-    function openRandomChapter(storyUrl) {
-        // Mở tab mới
-        const newTab = window.open(storyUrl, '_blank');
-        
-        if (!newTab) {
-            console.log("Popup bị chặn?");
-            return;
-        }
-
-        // Đợi tab load xong rồi tìm và click chap ngẫu nhiên
-        const checkInterval = setInterval(() => {
-            try {
-                const doc = newTab.document;
-                const chapterLinks = doc.querySelectorAll('a[href*="/doc-truyen/"]');
-                
-                if (chapterLinks.length > 0) {
-                    clearInterval(checkInterval);
-                    const randomChapter = chapterLinks[Math.floor(Math.random() * chapterLinks.length)];
-                    console.log("Tìm thấy chap, đang click...");
-                    randomChapter.click();
-                }
-            } catch(e) {
-                // Cross-origin hoặc chưa load xong, bỏ qua
-            }
-        }, 500);
-
-        // Sau 5 giây vẫn không tìm thấy thì thôi
-        setTimeout(() => {
-            clearInterval(checkInterval);
-        }, 5000);
-    }
-
-    async function hopToRandomStory() {
+    async function hopToRandomChapter() {
         if (stories.length === 0) {
             stopHop();
             alert("Không có truyện trong danh sách!");
@@ -365,14 +370,25 @@
             return false;
         }
 
+        // 1. Chọn truyện ngẫu nhiên
         const randomStory = stories[Math.floor(Math.random() * stories.length)];
         
-        // Mở truyện và tự động click vào chap
-        openRandomChapter(randomStory.url);
+        // 2. Lấy tổng số chap của truyện đó
+        const totalChaps = await getChapterCount(randomStory.url);
+        
+        // 3. Chọn số chap ngẫu nhiên (1 đến totalChaps)
+        const randomChapNum = Math.floor(Math.random() * totalChaps) + 1;
+        
+        // 4. Tạo URL chap
+        let baseUrl = randomStory.url.replace(/\/$/, '');
+        const chapterUrl = `${baseUrl}/chap-${randomChapNum}`;
+        
+        // 5. Mở tab mới
+        window.open(chapterUrl, '_blank');
         
         currentHopCount++;
         updateHopDisplay();
-        console.log(`Hop ${currentHopCount}/${hopSettings.maxHop}: ${randomStory.name}`);
+        console.log(`[Hop ${currentHopCount}/${hopSettings.maxHop}] ${randomStory.name} -> Chap ${randomChapNum}/${totalChaps}`);
         
         return true;
     }
@@ -400,7 +416,7 @@
                 return;
             }
 
-            await hopToRandomStory();
+            await hopToRandomChapter();
             
             if (isHopRunning && currentHopCount < hopSettings.maxHop) {
                 currentTimeout = setTimeout(executeHop, hopSettings.delay * 1000);
