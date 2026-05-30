@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Random truyện vi-hentai
 // @author       NoirNF
 // @match        https://vi-hentai.moe/*
@@ -82,7 +82,6 @@
         display:none;
         box-shadow:0 0 30px #7f5af0;
         font-family:sans-serif;
-        display:flex;
         flex-direction:column;
     `;
 
@@ -141,10 +140,15 @@
     `;
     document.head.appendChild(style);
 
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+        e.stopPropagation();
         if (moved) return;
-        panel.style.display = panel.style.display === "none" ? "flex" : "none";
-        renderStories();
+        if (panel.style.display === "none" || panel.style.display === "") {
+            panel.style.display = "flex";
+            renderStories();
+        } else {
+            panel.style.display = "none";
+        }
     });
 
     document.getElementById("getStories").addEventListener("click", () => {
@@ -231,5 +235,6 @@
         });
     }
 
+    panel.style.display = "none";
     renderStories();
 })();
