@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      11.0
+// @version      12.0
 // @description  Random truyện vi-hentai + Auto hop chap
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -16,9 +16,8 @@
 
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 
-    // Settings
     let hopSettings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || JSON.stringify({
-        autoFarm: false,
+        autoFarm: true,
         delay: 5,
         maxHop: 60
     }));
@@ -48,13 +47,8 @@
     `;
     document.body.appendChild(btn);
 
-    // =========================
-    // DRAG FLOAT BUTTON
-    // =========================
-    let dragging = false;
-    let moved = false;
-    let offsetX = 0, offsetY = 0;
-
+    // DRAG BUTTON
+    let dragging = false, moved = false, offsetX = 0, offsetY = 0;
     function startDrag(e) {
         dragging = true;
         moved = false;
@@ -62,7 +56,6 @@
         offsetX = touch.clientX - btn.offsetLeft;
         offsetY = touch.clientY - btn.offsetTop;
     }
-
     function moveDrag(e) {
         if (!dragging) return;
         moved = true;
@@ -72,11 +65,7 @@
         btn.style.right = "auto";
         btn.style.bottom = "auto";
     }
-
-    function endDrag() {
-        setTimeout(() => { dragging = false; }, 50);
-    }
-
+    function endDrag() { setTimeout(() => { dragging = false; }, 50); }
     btn.addEventListener("mousedown", startDrag);
     btn.addEventListener("touchstart", startDrag);
     document.addEventListener("mousemove", moveDrag);
@@ -151,16 +140,14 @@
     `;
     document.body.appendChild(panel);
 
-    // Load settings vào UI
+    // Load settings
     const autoFarmCheckbox = document.getElementById("autoFarmCheckbox");
     const delayInput = document.getElementById("delayInput");
     const maxHopInput = document.getElementById("maxHopInput");
-
     autoFarmCheckbox.checked = hopSettings.autoFarm;
     delayInput.value = hopSettings.delay;
     maxHopInput.value = hopSettings.maxHop;
 
-    // Save settings khi thay đổi
     function saveSettings() {
         hopSettings.autoFarm = autoFarmCheckbox.checked;
         hopSettings.delay = parseInt(delayInput.value) || 5;
@@ -168,20 +155,15 @@
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(hopSettings));
         updateHopDisplay();
     }
-
     autoFarmCheckbox.addEventListener("change", saveSettings);
     delayInput.addEventListener("change", saveSettings);
     maxHopInput.addEventListener("change", saveSettings);
 
-    // =========================
     // DRAG PANEL
-    // =========================
     let panelDragging = false, panelOffsetX = 0, panelOffsetY = 0;
     const dragHeader = panel.querySelector("#dragHeader");
-
     dragHeader.addEventListener("mousedown", startPanelDrag);
     dragHeader.addEventListener("touchstart", startPanelDrag);
-
     function startPanelDrag(e) {
         panelDragging = true;
         const touch = e.touches ? e.touches[0] : e;
@@ -190,23 +172,18 @@
         panelOffsetY = touch.clientY - rect.top;
         panel.style.transform = "none";
     }
-
-    document.addEventListener("mousemove", movePanel);
-    document.addEventListener("touchmove", movePanel);
-
     function movePanel(e) {
         if (!panelDragging) return;
         const touch = e.touches ? e.touches[0] : e;
         panel.style.left = `${touch.clientX - panelOffsetX}px`;
         panel.style.top = `${touch.clientY - panelOffsetY}px`;
     }
-
+    document.addEventListener("mousemove", movePanel);
+    document.addEventListener("touchmove", movePanel);
     document.addEventListener("mouseup", () => panelDragging = false);
     document.addEventListener("touchend", () => panelDragging = false);
 
-    // =========================
     // STYLE
-    // =========================
     const style = document.createElement("style");
     style.innerHTML = `
         #getStories, #randomStory, #clearStories {
@@ -221,34 +198,27 @@
         .storyOpenBtn {
             background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:10px;
         }
-        .storyOpenBtn:hover { background:#6b4ad8; }
     `;
     document.head.appendChild(style);
 
-    // =========================
     // TOGGLE PANEL
-    // =========================
     btn.addEventListener("click", () => {
         if (moved) return;
         panel.style.display = panel.style.display === "none" ? "block" : "none";
         renderStories();
     });
 
-    // =========================
     // TAB SWITCHING
-    // =========================
     const tabMain = document.getElementById("tabMain");
     const tabHop = document.getElementById("tabHop");
     const tabMainBtn = document.getElementById("tabMainBtn");
     const tabHopBtn = document.getElementById("tabHopBtn");
-
     tabMainBtn.addEventListener("click", () => {
         tabMain.style.display = "block";
         tabHop.style.display = "none";
         tabMainBtn.style.background = "#7f5af0";
         tabHopBtn.style.background = "#2cb67d";
     });
-
     tabHopBtn.addEventListener("click", () => {
         tabMain.style.display = "none";
         tabHop.style.display = "block";
@@ -257,14 +227,11 @@
         updateHopDisplay();
     });
 
-    // =========================
     // GET STORIES
-    // =========================
     document.getElementById("getStories").addEventListener("click", () => {
         const cards = document.querySelectorAll('a[href*="/truyen/"]');
         let added = 0;
         const existing = new Set(stories.map(s => s.url));
-
         cards.forEach(card => {
             try {
                 const path = new URL(card.href).pathname;
@@ -279,25 +246,17 @@
                 added++;
             } catch (err) {}
         });
-
         localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
         renderStories();
         alert(`Đã thêm ${added} truyện`);
     });
 
-    // =========================
     // RANDOM
-    // =========================
     document.getElementById("randomStory").addEventListener("click", () => {
-        if (stories.length === 0) {
-            alert("Chưa có truyện");
-            return;
-        }
-
+        if (stories.length === 0) { alert("Chưa có truyện"); return; }
         const resultBox = document.getElementById("resultBox");
         resultBox.innerHTML = "🎰 Đang random...";
         let count = 0;
-
         const interval = setInterval(() => {
             const random = stories[Math.floor(Math.random() * stories.length)];
             resultBox.innerHTML = `<div style="font-size:18px; color:#2cb67d;">${random.name}</div>`;
@@ -305,19 +264,12 @@
             if (count >= 20) {
                 clearInterval(interval);
                 const final = stories[Math.floor(Math.random() * stories.length)];
-                resultBox.innerHTML = `
-                    <div>
-                        <div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div>
-                        <a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở chap truyện</a>
-                    </div>
-                `;
+                resultBox.innerHTML = `<div><div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div><a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở chap truyện</a></div>`;
             }
         }, 80);
     });
 
-    // =========================
     // CLEAR
-    // =========================
     document.getElementById("clearStories").addEventListener("click", () => {
         if (!confirm("Xoá toàn bộ?")) return;
         stories = [];
@@ -325,44 +277,33 @@
         renderStories();
     });
 
-    // =========================
-    // RENDER STORIES (có thể click vào tên để mở)
-    // =========================
+    // RENDER STORIES
     function renderStories() {
         const list = document.getElementById("storyList");
         document.getElementById("storyCount").innerText = stories.length;
-
         if (stories.length === 0) {
             list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có truyện</div>`;
             return;
         }
-
         list.innerHTML = stories.map((s, i) => `
             <div class="storyItem">
                 <span class="storyName" data-url="${s.url}"><b>${i + 1}.</b> ${s.name}</span>
                 <button class="storyOpenBtn" data-url="${s.url}">📖 Mở</button>
             </div>
         `).join("");
-
-        // Click vào tên truyện cũng mở được
         document.querySelectorAll('.storyName').forEach(el => {
-            el.addEventListener('click', (e) => {
-                const url = el.getAttribute('data-url');
-                window.open(url, '_blank');
-            });
+            el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
         });
-
         document.querySelectorAll('.storyOpenBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const url = btn.getAttribute('data-url');
-                window.open(url, '_blank');
+                window.open(btn.getAttribute('data-url'), '_blank');
             });
         });
     }
 
     // =========================
-    // HOP LOGIC - VÀO CHAP LUÔN
+    // HOP LOGIC - MỞ TRANG TRUYỆN RỒI TỰ ĐỘNG CLICK VÀO CHAP
     // =========================
     let isHopRunning = false;
     let currentHopCount = 0;
@@ -378,40 +319,40 @@
         maxHopDisplay.innerText = hopSettings.maxHop;
     }
 
-    // Hàm lấy danh sách chap từ trang truyện
-    async function getChapterList(storyUrl) {
-        return new Promise((resolve) => {
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = storyUrl;
-            document.body.appendChild(iframe);
+    // Hàm mở truyện và tự động click vào chap ngẫu nhiên
+    function openRandomChapter(storyUrl) {
+        // Mở tab mới
+        const newTab = window.open(storyUrl, '_blank');
+        
+        if (!newTab) {
+            console.log("Popup bị chặn?");
+            return;
+        }
 
-            const timeout = setTimeout(() => {
-                if (iframe.parentNode) document.body.removeChild(iframe);
-                resolve([]);
-            }, 8000);
-
-            iframe.onload = () => {
-                clearTimeout(timeout);
-                try {
-                    const doc = iframe.contentDocument || iframe.contentWindow.document;
-                    const chapterLinks = doc.querySelectorAll('a[href*="/doc-truyen/"]');
-                    const chapters = Array.from(chapterLinks).map(a => ({
-                        name: a.textContent.trim(),
-                        url: a.href
-                    }));
-                    if (iframe.parentNode) document.body.removeChild(iframe);
-                    resolve(chapters);
-                } catch(e) {
-                    if (iframe.parentNode) document.body.removeChild(iframe);
-                    resolve([]);
+        // Đợi tab load xong rồi tìm và click chap ngẫu nhiên
+        const checkInterval = setInterval(() => {
+            try {
+                const doc = newTab.document;
+                const chapterLinks = doc.querySelectorAll('a[href*="/doc-truyen/"]');
+                
+                if (chapterLinks.length > 0) {
+                    clearInterval(checkInterval);
+                    const randomChapter = chapterLinks[Math.floor(Math.random() * chapterLinks.length)];
+                    console.log("Tìm thấy chap, đang click...");
+                    randomChapter.click();
                 }
-            };
-        });
+            } catch(e) {
+                // Cross-origin hoặc chưa load xong, bỏ qua
+            }
+        }, 500);
+
+        // Sau 5 giây vẫn không tìm thấy thì thôi
+        setTimeout(() => {
+            clearInterval(checkInterval);
+        }, 5000);
     }
 
-    // Hop vào chap ngẫu nhiên của truyện ngẫu nhiên
-    async function hopToRandomChapter() {
+    async function hopToRandomStory() {
         if (stories.length === 0) {
             stopHop();
             alert("Không có truyện trong danh sách!");
@@ -426,21 +367,13 @@
 
         const randomStory = stories[Math.floor(Math.random() * stories.length)];
         
-        // Lấy danh sách chap
-        const chapters = await getChapterList(randomStory.url);
-        
-        if (chapters.length === 0) {
-            console.log(`Không tìm thấy chap cho: ${randomStory.name}`);
-            currentHopCount++;
-            updateHopDisplay();
-            return true;
-        }
-
-        const randomChapter = chapters[Math.floor(Math.random() * chapters.length)];
-        window.open(randomChapter.url, '_blank');
+        // Mở truyện và tự động click vào chap
+        openRandomChapter(randomStory.url);
         
         currentHopCount++;
         updateHopDisplay();
+        console.log(`Hop ${currentHopCount}/${hopSettings.maxHop}: ${randomStory.name}`);
+        
         return true;
     }
 
@@ -467,7 +400,7 @@
                 return;
             }
 
-            await hopToRandomChapter();
+            await hopToRandomStory();
             
             if (isHopRunning && currentHopCount < hopSettings.maxHop) {
                 currentTimeout = setTimeout(executeHop, hopSettings.delay * 1000);
