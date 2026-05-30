@@ -1,0 +1,413 @@
+// ==UserScript==
+// @name         ViHentai Random Picker
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Random truyện vi-hentai + Config
+// @author       NoirNF
+// @match        https://vi-hentai.moe/*
+// @match        https://vi-hentai.pro/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=vi-hentai.moe
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const STORAGE_KEY = "vih_random_stories";
+    const CONFIGS_KEY = "vih_configs";
+
+    let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    let configs = JSON.parse(localStorage.getItem(CONFIGS_KEY) || "[]");
+
+    // =========================
+    // FLOAT BUTTON
+    // =========================
+    const btn = document.createElement("div");
+    btn.innerHTML = "👅";
+    btn.style.cssText = `
+        position:fixed;
+        right:20px;
+        bottom:100px;
+        width:60px;
+        height:60px;
+        border-radius:50%;
+        background:linear-gradient(135deg,#7f5af0,#2cb67d);
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        font-size:28px;
+        cursor:pointer;
+        z-index:999999;
+        box-shadow:0 0 20px #7f5af0;
+        user-select:none;
+        touch-action:none;
+    `;
+    document.body.appendChild(btn);
+
+    let dragging = false, moved = false, offsetX = 0, offsetY = 0;
+    function startDrag(e) {
+        dragging = true;
+        moved = false;
+        const touch = e.touches ? e.touches[0] : e;
+        offsetX = touch.clientX - btn.offsetLeft;
+        offsetY = touch.clientY - btn.offsetTop;
+    }
+    function moveDrag(e) {
+        if (!dragging) return;
+        moved = true;
+        const touch = e.touches ? e.touches[0] : e;
+        btn.style.left = `${touch.clientX - offsetX}px`;
+        btn.style.top = `${touch.clientY - offsetY}px`;
+        btn.style.right = "auto";
+        btn.style.bottom = "auto";
+    }
+    function endDrag() { setTimeout(() => { dragging = false; }, 50); }
+    btn.addEventListener("mousedown", startDrag);
+    btn.addEventListener("touchstart", startDrag);
+    document.addEventListener("mousemove", moveDrag);
+    document.addEventListener("touchmove", moveDrag);
+    document.addEventListener("mouseup", endDrag);
+    document.addEventListener("touchend", endDrag);
+
+    // =========================
+    // PANEL
+    // =========================
+    const panel = document.createElement("div");
+    panel.style.cssText = `
+        position:fixed;
+        top:50%;
+        left:50%;
+        transform:translate(-50%,-50%);
+        width:90%;
+        max-width:500px;
+        max-height:80vh;
+        background:#111;
+        border:2px solid #7f5af0;
+        border-radius:20px;
+        padding:20px;
+        z-index:999999;
+        color:white;
+        display:none;
+        box-shadow:0 0 30px #7f5af0;
+        font-family:sans-serif;
+        flex-direction:column;
+    `;
+
+    panel.innerHTML = `
+        <div style="flex-shrink:0;">
+            <h2 id="dragHeader" style="text-align:center;margin-bottom:15px;cursor:move;user-select:none;">🎲 Random Truyện</h2>
+            <div style="display:flex;gap:5px;margin-bottom:15px;border-bottom:1px solid #333;">
+                <button id="tabMainBtn" style="flex:1;background:#7f5af0;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">🎯 Main</button>
+                <button id="tabConfigBtn" style="flex:1;background:#2cb67d;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">⚙️ Config</button>
+            </div>
+        </div>
+
+        <!-- TAB MAIN -->
+        <div id="tabMain" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+            <div style="flex-shrink:0;">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
+                    <button id="getStories">📚 Lấy truyện</button>
+                    <button id="randomStory">🎰 Random</button>
+                    <button id="clearStories">🗑 Xoá</button>
+                </div>
+                <div id="resultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
+                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span></div>
+            </div>
+            <div id="storyList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+        </div>
+
+        <!-- TAB CONFIG -->
+        <div id="tabConfig" style="flex:1; display:none; flex-direction:column; min-height:0;">
+            <div style="flex-shrink:0;">
+                <div style="display:flex;gap:10px;margin-bottom:15px;">
+                    <input type="text" id="configNameInput" placeholder="Tên config" style="flex:2; padding:10px; border-radius:8px; border:1px solid #7f5af0; background:#1a1a1a; color:white;">
+                    <button id="saveConfigBtn" style="flex:1; background:#7f5af0; border:none; color:white; padding:10px; border-radius:8px; cursor:pointer;">💾 Lưu config</button>
+                </div>
+                <div style="margin-bottom:10px; font-size:14px; color:#aaa;">Danh sách config:</div>
+            </div>
+            <div id="configList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+        </div>
+    `;
+    document.body.appendChild(panel);
+
+    // =========================
+    // DRAG PANEL
+    // =========================
+    let panelDragging = false, panelOffsetX = 0, panelOffsetY = 0;
+    const dragHeader = panel.querySelector("#dragHeader");
+    dragHeader.addEventListener("mousedown", startPanelDrag);
+    dragHeader.addEventListener("touchstart", startPanelDrag);
+    function startPanelDrag(e) {
+        panelDragging = true;
+        const touch = e.touches ? e.touches[0] : e;
+        const rect = panel.getBoundingClientRect();
+        panelOffsetX = touch.clientX - rect.left;
+        panelOffsetY = touch.clientY - rect.top;
+        panel.style.transform = "none";
+    }
+    function movePanel(e) {
+        if (!panelDragging) return;
+        const touch = e.touches ? e.touches[0] : e;
+        panel.style.left = `${touch.clientX - panelOffsetX}px`;
+        panel.style.top = `${touch.clientY - panelOffsetY}px`;
+    }
+    document.addEventListener("mousemove", movePanel);
+    document.addEventListener("touchmove", movePanel);
+    document.addEventListener("mouseup", () => panelDragging = false);
+    document.addEventListener("touchend", () => panelDragging = false);
+
+    // =========================
+    // STYLE
+    // =========================
+    const style = document.createElement("style");
+    style.innerHTML = `
+        #getStories, #randomStory, #clearStories {
+            flex:1; background:#7f5af0; border:none; color:white; padding:10px; border-radius:12px; font-size:14px; cursor:pointer; font-weight:bold;
+        }
+        .storyItem, .configItem {
+            background:#1a1a1a; padding:10px; border-radius:12px; margin-bottom:8px; border:1px solid #333; display:flex; justify-content:space-between; align-items:center;
+        }
+        .storyName {
+            flex:1; color:#2cb67d; text-decoration:none; cursor:pointer; word-break:break-word;
+        }
+        .storyOpenBtn, .configBtn {
+            background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
+        }
+        .configDeleteBtn { background:#dc2626; }
+        .configDownloadBtn { background:#2cb67d; }
+        .configUploadBtn { background:#f59e0b; }
+    `;
+    document.head.appendChild(style);
+
+    // =========================
+    // TOGGLE PANEL
+    // =========================
+    btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (moved) return;
+        if (panel.style.display === "none" || panel.style.display === "") {
+            panel.style.display = "flex";
+            renderStories();
+            renderConfigs();
+        } else {
+            panel.style.display = "none";
+        }
+    });
+
+    // =========================
+    // TAB SWITCHING
+    // =========================
+    const tabMain = document.getElementById("tabMain");
+    const tabConfig = document.getElementById("tabConfig");
+    const tabMainBtn = document.getElementById("tabMainBtn");
+    const tabConfigBtn = document.getElementById("tabConfigBtn");
+
+    tabMainBtn.addEventListener("click", () => {
+        tabMain.style.display = "flex";
+        tabConfig.style.display = "none";
+        tabMainBtn.style.background = "#7f5af0";
+        tabConfigBtn.style.background = "#2cb67d";
+        renderStories();
+    });
+
+    tabConfigBtn.addEventListener("click", () => {
+        tabMain.style.display = "none";
+        tabConfig.style.display = "flex";
+        tabMainBtn.style.background = "#2cb67d";
+        tabConfigBtn.style.background = "#7f5af0";
+        renderConfigs();
+    });
+
+    // =========================
+    // MAIN TAB FUNCTIONS
+    // =========================
+    document.getElementById("getStories").addEventListener("click", () => {
+        const cards = document.querySelectorAll('a[href*="/truyen/"]');
+        let added = 0;
+        const existing = new Set(stories.map(s => s.url));
+        cards.forEach(card => {
+            try {
+                const path = new URL(card.href).pathname;
+                const match = path.match(/\/truyen\/([^/]+)/);
+                if (!match) return;
+                const slug = match[1];
+                const storyUrl = location.origin + "/truyen/" + slug;
+                if (existing.has(storyUrl)) return;
+                existing.add(storyUrl);
+                const name = slug.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()).trim();
+                stories.push({ name, url: card.href });
+                added++;
+            } catch (err) {}
+        });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+        renderStories();
+        alert(`Đã thêm ${added} truyện`);
+    });
+
+    document.getElementById("randomStory").addEventListener("click", () => {
+        if (stories.length === 0) {
+            alert("Chưa có truyện");
+            return;
+        }
+
+        const resultBox = document.getElementById("resultBox");
+        resultBox.innerHTML = "🎰 Đang random...";
+        let count = 0;
+
+        const interval = setInterval(() => {
+            const random = stories[Math.floor(Math.random() * stories.length)];
+            resultBox.innerHTML = `<div style="font-size:18px; color:#2cb67d;">${random.name}</div>`;
+            count++;
+            if (count >= 20) {
+                clearInterval(interval);
+                const final = stories[Math.floor(Math.random() * stories.length)];
+                resultBox.innerHTML = `
+                    <div>
+                        <div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div>
+                        <a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở truyện</a>
+                    </div>
+                `;
+            }
+        }, 80);
+    });
+
+    document.getElementById("clearStories").addEventListener("click", () => {
+        if (!confirm("Xoá toàn bộ truyện?")) return;
+        stories = [];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+        renderStories();
+    });
+
+    function renderStories() {
+        const list = document.getElementById("storyList");
+        document.getElementById("storyCount").innerText = stories.length;
+
+        if (stories.length === 0) {
+            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có truyện</div>`;
+            return;
+        }
+
+        list.innerHTML = stories.map((s, i) => `
+            <div class="storyItem">
+                <span class="storyName" data-url="${s.url}"><b>${i + 1}.</b> ${s.name}</span>
+                <button class="storyOpenBtn" data-url="${s.url}">📖 Mở</button>
+            </div>
+        `).join("");
+
+        document.querySelectorAll('.storyName').forEach(el => {
+            el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
+        });
+        document.querySelectorAll('.storyOpenBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+    }
+
+    // =========================
+    // CONFIG TAB FUNCTIONS
+    // =========================
+    function saveConfigs() {
+        localStorage.setItem(CONFIGS_KEY, JSON.stringify(configs));
+    }
+
+    function renderConfigs() {
+        const list = document.getElementById("configList");
+
+        if (configs.length === 0) {
+            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có config nào</div>`;
+            return;
+        }
+
+        list.innerHTML = configs.map((config, index) => `
+            <div class="configItem">
+                <div style="flex:1; word-break:break-word;"><b>${index + 1}.</b> ${config.name}</div>
+                <div>
+                    <button class="configBtn configDeleteBtn" data-index="${index}">🗑️</button>
+                    <button class="configBtn configUploadBtn" data-index="${index}">📤</button>
+                    <button class="configBtn configDownloadBtn" data-index="${index}">📥</button>
+                </div>
+            </div>
+        `).join("");
+
+        // Xóa config
+        document.querySelectorAll('.configDeleteBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                if (confirm(`Xóa config "${configs[index].name}"?`)) {
+                    configs.splice(index, 1);
+                    saveConfigs();
+                    renderConfigs();
+                }
+            });
+        });
+
+        // Upload: cập nhật config từ danh sách truyện hiện tại
+        document.querySelectorAll('.configUploadBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                configs[index].stories = JSON.parse(JSON.stringify(stories));
+                saveConfigs();
+                alert(`Đã cập nhật config "${configs[index].name}" với ${stories.length} truyện`);
+                renderConfigs();
+            });
+        });
+
+        // Download: tải config vào danh sách truyện chính (thay thế)
+        document.querySelectorAll('.configDownloadBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                const loadedStories = configs[index].stories;
+                if (loadedStories && loadedStories.length > 0) {
+                    stories = JSON.parse(JSON.stringify(loadedStories));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+                    renderStories();
+                    alert(`Đã tải config "${configs[index].name}" với ${stories.length} truyện vào danh sách chính`);
+                } else {
+                    alert("Config này không có truyện nào!");
+                }
+            });
+        });
+    }
+
+    // Lưu config mới
+    document.getElementById("saveConfigBtn").addEventListener("click", () => {
+        const nameInput = document.getElementById("configNameInput");
+        const name = nameInput.value.trim();
+        
+        if (!name) {
+            alert("Vui lòng nhập tên config");
+            return;
+        }
+        
+        if (stories.length === 0) {
+            alert("Chưa có truyện nào để lưu! Hãy sang tab Main và lấy truyện trước.");
+            return;
+        }
+        
+        // Kiểm tra trùng tên
+        const existing = configs.find(c => c.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+            if (!confirm(`Config "${name}" đã tồn tại. Cập nhật lại?`)) return;
+            existing.stories = JSON.parse(JSON.stringify(stories));
+        } else {
+            configs.push({
+                name: name,
+                stories: JSON.parse(JSON.stringify(stories))
+            });
+        }
+        
+        saveConfigs();
+        nameInput.value = "";
+        renderConfigs();
+        alert(`Đã lưu config "${name}" với ${stories.length} truyện`);
+        
+        // Chuyển sang tab config
+        tabConfigBtn.click();
+    });
+
+    panel.style.display = "none";
+    renderStories();
+    renderConfigs();
+})();
