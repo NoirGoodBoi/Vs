@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Random truyện vi-hentai
 // @author       NoirNF
 // @match        https://vi-hentai.moe/*
@@ -72,8 +72,8 @@
         transform:translate(-50%,-50%);
         width:90%;
         max-width:420px;
-        max-height:70vh;
-        overflow:auto;
+        height:80vh;
+        max-height:80vh;
         background:#111;
         border:2px solid #7f5af0;
         border-radius:20px;
@@ -83,19 +83,22 @@
         display:none;
         box-shadow:0 0 30px #7f5af0;
         font-family:sans-serif;
+        display:flex;
         flex-direction:column;
     `;
 
     panel.innerHTML = `
-        <h2 id="dragHeader" style="text-align:center;margin-bottom:15px;cursor:move;user-select:none;">🎲 Random Truyện</h2>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
-            <button id="getStories">📚 Lấy truyện</button>
-            <button id="randomStory">🎰 Random</button>
-            <button id="clearStories">🗑 Xoá</button>
+        <div style="flex-shrink:0;">
+            <h2 id="dragHeader" style="text-align:center;margin-bottom:15px;cursor:move;user-select:none;">🎲 Random Truyện</h2>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
+                <button id="getStories">📚 Lấy truyện</button>
+                <button id="randomStory">🎰 Random</button>
+                <button id="clearStories">🗑 Xoá</button>
+            </div>
+            <div id="resultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
+            <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span></div>
         </div>
-        <div id="resultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
-        <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span></div>
-        <div id="storyList"></div>
+        <div id="storyList" style="flex:1; overflow-y:auto; min-height:0;"></div>
     `;
     document.body.appendChild(panel);
 
@@ -141,7 +144,7 @@
 
     btn.addEventListener("click", () => {
         if (moved) return;
-        panel.style.display = panel.style.display === "none" ? "block" : "none";
+        panel.style.display = panel.style.display === "none" ? "flex" : "none";
         renderStories();
     });
 
