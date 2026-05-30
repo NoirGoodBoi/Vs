@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      15.0
+// @version      1.1
 // @description  Random truyện vi-hentai
+// @author       NoirNF
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=vi-hentai.moe
 // @grant        none
 // ==/UserScript==
 
@@ -15,11 +17,8 @@
 
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 
-    // =========================
-    // FLOAT BUTTON
-    // =========================
     const btn = document.createElement("div");
-    btn.innerHTML = "🎰";
+    btn.innerHTML = "👅";
     btn.style.cssText = `
         position:fixed;
         right:20px;
@@ -40,7 +39,6 @@
     `;
     document.body.appendChild(btn);
 
-    // DRAG BUTTON
     let dragging = false, moved = false, offsetX = 0, offsetY = 0;
     function startDrag(e) {
         dragging = true;
@@ -66,9 +64,6 @@
     document.addEventListener("mouseup", endDrag);
     document.addEventListener("touchend", endDrag);
 
-    // =========================
-    // PANEL
-    // =========================
     const panel = document.createElement("div");
     panel.style.cssText = `
         position:fixed;
@@ -104,7 +99,6 @@
     `;
     document.body.appendChild(panel);
 
-    // DRAG PANEL
     let panelDragging = false, panelOffsetX = 0, panelOffsetY = 0;
     const dragHeader = panel.querySelector("#dragHeader");
     dragHeader.addEventListener("mousedown", startPanelDrag);
@@ -128,7 +122,6 @@
     document.addEventListener("mouseup", () => panelDragging = false);
     document.addEventListener("touchend", () => panelDragging = false);
 
-    // STYLE
     const style = document.createElement("style");
     style.innerHTML = `
         #getStories, #randomStory, #clearStories {
@@ -146,14 +139,12 @@
     `;
     document.head.appendChild(style);
 
-    // TOGGLE PANEL
     btn.addEventListener("click", () => {
         if (moved) return;
         panel.style.display = panel.style.display === "none" ? "block" : "none";
         renderStories();
     });
 
-    // GET STORIES
     document.getElementById("getStories").addEventListener("click", () => {
         const cards = document.querySelectorAll('a[href*="/truyen/"]');
         let added = 0;
@@ -177,7 +168,6 @@
         alert(`Đã thêm ${added} truyện`);
     });
 
-    // RANDOM
     document.getElementById("randomStory").addEventListener("click", () => {
         if (stories.length === 0) {
             alert("Chưa có truyện");
@@ -204,8 +194,7 @@
             }
         }, 80);
     });
-
-    // CLEAR
+    
     document.getElementById("clearStories").addEventListener("click", () => {
         if (!confirm("Xoá toàn bộ?")) return;
         stories = [];
@@ -213,7 +202,6 @@
         renderStories();
     });
 
-    // RENDER STORIES
     function renderStories() {
         const list = document.getElementById("storyList");
         document.getElementById("storyCount").innerText = stories.length;
