@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      13.0
-// @description  Random truyện + random chap
+// @version      14.0
+// @description  Random truyện + random chap (đọc link thật từ HTML)
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
 // @grant        GM_xmlhttpRequest
@@ -13,7 +13,7 @@
 
     const STORAGE_KEY = "vih_random_stories";
     const SETTINGS_KEY = "vih_hop_settings";
-    const CHAPTER_CACHE = new Map();
+    const CHAPTER_CACHE = new Map(); // Lưu [{name, url}, ...]
 
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 
@@ -304,45 +304,71 @@
     }
 
     // =========================
-    // HOP LOGIC - LẤY SỐ CHAP TỪ URL
+    // HOP LOGIC - LẤY DANH SÁCH CHAP THẬT TỪ HTML
     // =========================
-    function getChapterCount(storyUrl) {
+    function getChapterList(storyUrl) {
         return new Promise((resolve) => {
+            // Kiểm tra cache
             if (CHAPTER_CACHE.has(storyUrl)) {
                 resolve(CHAPTER_CACHE.get(storyUrl));
                 return;
             }
 
-            // Lấy trang truyện để đếm số chap
+            // Dùng GM_xmlhttpRequest để đọc HTML trang truyện
             GM_xmlhttpRequest({
                 method: "GET",
                 url: storyUrl,
                 onload: function(response) {
                     const html = response.responseText;
-                    // Tìm tất cả link chap
-                    const matches = html.match(/\/doc-truyen\/[^"'\s]+/g);
-                    let count = matches ? matches.length : 1;
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, "text/html");
                     
-                    // Thử pattern khác nếu không thấy
-                    if (count === 1 && !html.includes('/doc-truyen/')) {
-                        const chapMatch = html.match(/chap-(\d+)/g);
-                        if (chapMatch) {
-                            const numbers = chapMatch.map(m => parseInt(m.split('-')[1])).filter(n => !isNaN(n));
-                            count = Math.max(...numbers, 1);
+                    // Tìm tất cả link đến chap (thường chứa /doc-truyen/)
+                    const chapterLinks = doc.querySelectorAll('a[href*="/doc-truyen/"]');
+                    
+                    const chapters = [];
+                    chapterLinks.forEach(link => {
+                        let href = link.getAttribute('href');
+                        // Xử lý link tương đối
+                        if (href && !href.startsWith('http')) {
+                            href = new URL(href, storyUrl).href;
+                        }
+                        if (href && href.includes('/doc-truyen/')) {
+                            chapters.push({
+                                name: link.textContent.trim(),
+                                url: href
+                            });
+                        }
+                    });
+                    
+                    // Nếu không tìm thấy theo selector, thử regex
+                    if (chapters.length === 0) {
+                        const regex = /<a[^>]+href="([^"]*\/doc-truyen\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+                        let match;
+                        while ((match = regex.exec(html)) !== null) {
+                            let href = match[1];
+                            if (href && !href.startsWith('http')) {
+                                href = new URL(href, storyUrl).href;
+                            }
+                            chapters.push({
+                                name: match[2].trim(),
+                                url: href
+                            });
                         }
                     }
                     
-                    CHAPTER_CACHE.set(storyUrl, count);
-                    resolve(count);
+                    // Lưu cache
+                    CHAPTER_CACHE.set(storyUrl, chapters);
+                    resolve(chapters);
                 },
                 onerror: function() {
-                    resolve(1);
+                    resolve([]);
                 }
             });
         });
     }
 
-    // HOP: VÀO TRUYỆN NGẪU NHIÊN + CHAP NGẪU NHIÊN
+    // HOP: VÀO TRUYỆN NGẪU NHIÊN + CHAP NGẪU NHIÊN (lấy từ danh sách thật)
     let isHopRunning = false;
     let currentHopCount = 0;
     let currentTimeout = null;
@@ -373,22 +399,26 @@
         // 1. Chọn truyện ngẫu nhiên
         const randomStory = stories[Math.floor(Math.random() * stories.length)];
         
-        // 2. Lấy tổng số chap của truyện đó
-        const totalChaps = await getChapterCount(randomStory.url);
+        // 2. Lấy danh sách chap thật từ HTML
+        const chapters = await getChapterList(randomStory.url);
         
-        // 3. Chọn số chap ngẫu nhiên (1 đến totalChaps)
-        const randomChapNum = Math.floor(Math.random() * totalChaps) + 1;
+        if (chapters.length === 0) {
+            console.log(`Không tìm thấy chap nào cho: ${randomStory.name}`);
+            // Vẫn tính là 1 lần hop nhưng không mở được
+            currentHopCount++;
+            updateHopDisplay();
+            return true;
+        }
         
-        // 4. Tạo URL chap
-        let baseUrl = randomStory.url.replace(/\/$/, '');
-        const chapterUrl = `${baseUrl}/chap-${randomChapNum}`;
+        // 3. Chọn chap ngẫu nhiên từ danh sách thật
+        const randomChapter = chapters[Math.floor(Math.random() * chapters.length)];
         
-        // 5. Mở tab mới
-        window.open(chapterUrl, '_blank');
+        // 4. Mở chap đó
+        window.open(randomChapter.url, '_blank');
         
         currentHopCount++;
         updateHopDisplay();
-        console.log(`[Hop ${currentHopCount}/${hopSettings.maxHop}] ${randomStory.name} -> Chap ${randomChapNum}/${totalChaps}`);
+        console.log(`[Hop ${currentHopCount}/${hopSettings.maxHop}] ${randomStory.name} -> ${randomChapter.name} (${randomChapter.url})`);
         
         return true;
     }
