@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Random truyện vi-hentai + Config
+// @version      3.0
+// @description  Random truyện vi-hentai + Config + Thể loại
 // @author       NoirNF
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -15,9 +15,11 @@
 
     const STORAGE_KEY = "vih_random_stories";
     const CONFIGS_KEY = "vih_configs";
+    const GENRES_KEY = "vih_genres";
 
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     let configs = JSON.parse(localStorage.getItem(CONFIGS_KEY) || "[]");
+    let genres = JSON.parse(localStorage.getItem(GENRES_KEY) || "[]");
 
     // =========================
     // FLOAT BUTTON
@@ -80,7 +82,7 @@
         transform:translate(-50%,-50%);
         width:90%;
         max-width:500px;
-        max-height:50vh;
+        max-height:80vh;
         background:#111;
         border:2px solid #7f5af0;
         border-radius:20px;
@@ -98,7 +100,8 @@
             <h2 id="dragHeader" style="text-align:center;margin-bottom:15px;cursor:move;user-select:none;">🎲 Random Truyện</h2>
             <div style="display:flex;gap:5px;margin-bottom:15px;border-bottom:1px solid #333;">
                 <button id="tabMainBtn" style="flex:1;background:#7f5af0;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">🎯 Main</button>
-                <button id="tabConfigBtn" style="flex:1;background:#2cb67d;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">⚙️ Config</button>
+                <button id="tabGenreBtn" style="flex:1;background:#2cb67d;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">🏷️ Thể loại</button>
+                <button id="tabConfigBtn" style="flex:1;background:#f59e0b;border:none;color:white;padding:10px;border-radius:12px 12px 0 0;font-size:14px;cursor:pointer;font-weight:bold;">⚙️ Config</button>
             </div>
         </div>
 
@@ -114,6 +117,20 @@
                 <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span></div>
             </div>
             <div id="storyList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+        </div>
+
+        <!-- TAB THỂ LOẠI -->
+        <div id="tabGenre" style="flex:1; display:none; flex-direction:column; min-height:0;">
+            <div style="flex-shrink:0;">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
+                    <button id="getGenres">📚 Lấy thể loại</button>
+                    <button id="randomGenre">🎰 Random thể loại</button>
+                    <button id="clearGenres">🗑 Xoá</button>
+                </div>
+                <div id="genreResultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
+                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng thể loại: <span id="genreCount">0</span></div>
+            </div>
+            <div id="genreList" style="flex:1; overflow-y:auto; min-height:0;"></div>
         </div>
 
         <!-- TAB CONFIG -->
@@ -161,16 +178,16 @@
     // =========================
     const style = document.createElement("style");
     style.innerHTML = `
-        #getStories, #randomStory, #clearStories {
+        #getStories, #randomStory, #clearStories, #getGenres, #randomGenre, #clearGenres {
             flex:1; background:#7f5af0; border:none; color:white; padding:10px; border-radius:12px; font-size:14px; cursor:pointer; font-weight:bold;
         }
-        .storyItem, .configItem {
+        .storyItem, .configItem, .genreItem {
             background:#1a1a1a; padding:10px; border-radius:12px; margin-bottom:8px; border:1px solid #333; display:flex; justify-content:space-between; align-items:center;
         }
-        .storyName {
+        .storyName, .genreName {
             flex:1; color:#2cb67d; text-decoration:none; cursor:pointer; word-break:break-word;
         }
-        .storyOpenBtn, .configBtn {
+        .storyOpenBtn, .configBtn, .genreOpenBtn {
             background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
         }
         .configDeleteBtn { background:#dc2626; }
@@ -188,6 +205,7 @@
         if (panel.style.display === "none" || panel.style.display === "") {
             panel.style.display = "flex";
             renderStories();
+            renderGenres();
             renderConfigs();
         } else {
             panel.style.display = "none";
@@ -198,25 +216,38 @@
     // TAB SWITCHING
     // =========================
     const tabMain = document.getElementById("tabMain");
+    const tabGenre = document.getElementById("tabGenre");
     const tabConfig = document.getElementById("tabConfig");
     const tabMainBtn = document.getElementById("tabMainBtn");
+    const tabGenreBtn = document.getElementById("tabGenreBtn");
     const tabConfigBtn = document.getElementById("tabConfigBtn");
 
-    tabMainBtn.addEventListener("click", () => {
-        tabMain.style.display = "flex";
-        tabConfig.style.display = "none";
-        tabMainBtn.style.background = "#7f5af0";
-        tabConfigBtn.style.background = "#2cb67d";
-        renderStories();
-    });
-
-    tabConfigBtn.addEventListener("click", () => {
+    function setActiveTab(active) {
         tabMain.style.display = "none";
-        tabConfig.style.display = "flex";
+        tabGenre.style.display = "none";
+        tabConfig.style.display = "none";
         tabMainBtn.style.background = "#2cb67d";
-        tabConfigBtn.style.background = "#7f5af0";
-        renderConfigs();
-    });
+        tabGenreBtn.style.background = "#2cb67d";
+        tabConfigBtn.style.background = "#2cb67d";
+        
+        if (active === "main") {
+            tabMain.style.display = "flex";
+            tabMainBtn.style.background = "#7f5af0";
+            renderStories();
+        } else if (active === "genre") {
+            tabGenre.style.display = "flex";
+            tabGenreBtn.style.background = "#7f5af0";
+            renderGenres();
+        } else if (active === "config") {
+            tabConfig.style.display = "flex";
+            tabConfigBtn.style.background = "#7f5af0";
+            renderConfigs();
+        }
+    }
+
+    tabMainBtn.addEventListener("click", () => setActiveTab("main"));
+    tabGenreBtn.addEventListener("click", () => setActiveTab("genre"));
+    tabConfigBtn.addEventListener("click", () => setActiveTab("config"));
 
     // =========================
     // MAIN TAB FUNCTIONS
@@ -306,6 +337,127 @@
     }
 
     // =========================
+    // GENRE TAB FUNCTIONS
+    // =========================
+    document.getElementById("getGenres").addEventListener("click", () => {
+        // Tìm tất cả link thể loại
+        const genreLinks = document.querySelectorAll('a[href*="/the-loai/"]');
+        let added = 0;
+        const existing = new Set(genres.map(g => g.url));
+        
+        genreLinks.forEach(link => {
+            try {
+                const href = link.href;
+                if (existing.has(href)) return;
+                
+                // Lấy tên thể loại từ text hoặc từ URL
+                let name = link.textContent.trim();
+                if (!name || name.length === 0) {
+                    const match = href.match(/\/the-loai\/([^/]+)/);
+                    if (match) {
+                        name = match[1].replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                    }
+                }
+                
+                if (name && href) {
+                    genres.push({ name, url: href });
+                    existing.add(href);
+                    added++;
+                }
+            } catch (err) {}
+        });
+        
+        // Nếu không tìm thấy qua selector, thử cách khác
+        if (added === 0) {
+            const allLinks = document.querySelectorAll('a');
+            allLinks.forEach(link => {
+                try {
+                    const href = link.href;
+                    if (href && href.includes('/the-loai/') && !existing.has(href)) {
+                        let name = link.textContent.trim();
+                        if (!name || name.length === 0 || name.length > 50) {
+                            const match = href.match(/\/the-loai\/([^/]+)/);
+                            if (match) {
+                                name = match[1].replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                            }
+                        }
+                        if (name && name.length > 0 && name.length < 50) {
+                            genres.push({ name, url: href });
+                            existing.add(href);
+                            added++;
+                        }
+                    }
+                } catch (err) {}
+            });
+        }
+        
+        localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+        renderGenres();
+        alert(`Đã thêm ${added} thể loại`);
+    });
+
+    document.getElementById("randomGenre").addEventListener("click", () => {
+        if (genres.length === 0) {
+            alert("Chưa có thể loại");
+            return;
+        }
+
+        const genreResultBox = document.getElementById("genreResultBox");
+        genreResultBox.innerHTML = "🎰 Đang random...";
+        let count = 0;
+
+        const interval = setInterval(() => {
+            const random = genres[Math.floor(Math.random() * genres.length)];
+            genreResultBox.innerHTML = `<div style="font-size:18px; color:#2cb67d;">${random.name}</div>`;
+            count++;
+            if (count >= 20) {
+                clearInterval(interval);
+                const final = genres[Math.floor(Math.random() * genres.length)];
+                genreResultBox.innerHTML = `
+                    <div>
+                        <div style="font-size:22px; color:#2cb67d; margin-bottom:10px; font-weight:bold;">🎉 ${final.name}</div>
+                        <a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:16px;">📖 Mở thể loại</a>
+                    </div>
+                `;
+            }
+        }, 80);
+    });
+
+    document.getElementById("clearGenres").addEventListener("click", () => {
+        if (!confirm("Xoá toàn bộ thể loại?")) return;
+        genres = [];
+        localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+        renderGenres();
+    });
+
+    function renderGenres() {
+        const list = document.getElementById("genreList");
+        document.getElementById("genreCount").innerText = genres.length;
+
+        if (genres.length === 0) {
+            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có thể loại</div>`;
+            return;
+        }
+
+        list.innerHTML = genres.map((g, i) => `
+            <div class="genreItem">
+                <span class="genreName" data-url="${g.url}"><b>${i + 1}.</b> ${g.name}</span>
+                <button class="genreOpenBtn" data-url="${g.url}">📖 Mở</button>
+            </div>
+        `).join("");
+
+        document.querySelectorAll('.genreName').forEach(el => {
+            el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
+        });
+        document.querySelectorAll('.genreOpenBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+    }
+
+    // =========================
     // CONFIG TAB FUNCTIONS
     // =========================
     function saveConfigs() {
@@ -331,7 +483,6 @@
             </div>
         `).join("");
 
-        // Xóa config
         document.querySelectorAll('.configDeleteBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const index = parseInt(btn.getAttribute('data-index'));
@@ -343,7 +494,6 @@
             });
         });
 
-        // Upload: cập nhật config từ danh sách truyện hiện tại
         document.querySelectorAll('.configUploadBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const index = parseInt(btn.getAttribute('data-index'));
@@ -354,7 +504,6 @@
             });
         });
 
-        // Download: tải config vào danh sách truyện chính (thay thế)
         document.querySelectorAll('.configDownloadBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const index = parseInt(btn.getAttribute('data-index'));
@@ -371,7 +520,6 @@
         });
     }
 
-    // Lưu config mới
     document.getElementById("saveConfigBtn").addEventListener("click", () => {
         const nameInput = document.getElementById("configNameInput");
         const name = nameInput.value.trim();
@@ -386,7 +534,6 @@
             return;
         }
         
-        // Kiểm tra trùng tên
         const existing = configs.find(c => c.name.toLowerCase() === name.toLowerCase());
         if (existing) {
             if (!confirm(`Config "${name}" đã tồn tại. Cập nhật lại?`)) return;
@@ -402,12 +549,11 @@
         nameInput.value = "";
         renderConfigs();
         alert(`Đã lưu config "${name}" với ${stories.length} truyện`);
-        
-        // Chuyển sang tab config
-        tabConfigBtn.click();
+        setActiveTab("config");
     });
 
     panel.style.display = "none";
     renderStories();
+    renderGenres();
     renderConfigs();
 })();
