@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess Noir
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Hack chess.com với GUI đẹp, chỉ mũi tên nước đi tốt nhất dùng Stockfish
 // @author       Noir
 // @match        *://www.chess.com/*
@@ -43,7 +43,6 @@
     let analyzeTimeoutId = null;
     let activeAnalyzeToken = 0;
     let pendingArrowMove = null;
-    let arrowDebounceTimer = null;
     let lastRenderedMove = "";
     let lastStableDepth = 0;
     const START_POSITION_BOARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
@@ -814,11 +813,6 @@
             clearTimeout(pendingAnalyzeTimeout);
             pendingAnalyzeTimeout = null;
         }
-        if (arrowDebounceTimer) {
-            clearTimeout(arrowDebounceTimer);
-            arrowDebounceTimer = null;
-        }
-        pendingArrowMove = null;
         scheduledFenForAnalyze = "";
         playerColor = null;
         lastPlayerColorSource = "unknown";
@@ -1417,18 +1411,11 @@
 
         updateStatus("✨ Đến lượt bạn!");
         
-        // DEBOUNCE: Chờ 500ms trước khi vẽ, nếu có move mới hơn thì thay thế
-        if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
-        pendingArrowMove = { move: safeMove, promotion: parsedBestMove.promotion };
-        arrowDebounceTimer = setTimeout(() => {
-            if (pendingArrowMove && showArrows && pendingArrowMove.move === lastBestMove) {
-                clearArrows();
-                drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
-                lastRenderedMove = pendingArrowMove.move;
-                pendingArrowMove = null;
-            }
-            arrowDebounceTimer = null;
-        }, 500);
+        // *** SỬA LỖI: Xóa debounce, vẽ mũi tên ngay lập tức ***
+        clearArrows(); // Xóa mũi tên cũ
+        drawMoveArrows(safeMove, null, { primaryPromotion: parsedBestMove.promotion });
+        lastRenderedMove = safeMove;
+        lastRenderedFenForArrows = latestFen;
     }
 
     // --- MAIN LOOP ---
@@ -1488,26 +1475,20 @@
                         }
                     }
                     
+                    // Giữ mũi tên khi đến lượt và không có thay đổi
                     if (showArrows && fen && lastBestMove && (fen !== lastRenderedFenForArrows || !document.getElementById('noir-arrow-layer'))) {
                         const liveTurn = getCurrentTurnFromFen(fen);
                         if (liveTurn === playerColor && lastBestMove && lastRenderedMove !== lastBestMove) {
                             const safeLiveMove = resolveSafeMoveForFen(lastBestMove, fen, liveTurn);
                             if (safeLiveMove && safeLiveMove !== lastRenderedMove) {
-                                if (arrowDebounceTimer) clearTimeout(arrowDebounceTimer);
                                 const parsedMove = parsePromotionMove(safeLiveMove);
-                                pendingArrowMove = { move: safeLiveMove, promotion: parsedMove.promotion };
-                                arrowDebounceTimer = setTimeout(() => {
-                                    if (pendingArrowMove && showArrows) {
-                                        clearArrows();
-                                        drawMoveArrows(pendingArrowMove.move, null, { primaryPromotion: pendingArrowMove.promotion });
-                                        lastRenderedMove = pendingArrowMove.move;
-                                        pendingArrowMove = null;
-                                    }
-                                    arrowDebounceTimer = null;
-                                }, 500);
+                                clearArrows();
+                                drawMoveArrows(safeLiveMove, null, { primaryPromotion: parsedMove.promotion });
+                                lastRenderedMove = safeLiveMove;
                             }
                             lastRenderedFenForArrows = fen;
                         } else if (liveTurn !== playerColor) {
+                            // Xóa mũi tên khi không phải lượt của bạn
                             clearArrows();
                             lastRenderedFenForArrows = fen;
                             lastRenderedMove = "";
