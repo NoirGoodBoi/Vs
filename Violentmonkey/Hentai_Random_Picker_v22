@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      21.0
+// @version      22.0
 // @description  Random truyện vi-hentai + Config + Thể loại + Tìm kiếm + Sửa URL
 // @author       NoirNF
 // @match        https://vi-hentai.moe/*
@@ -21,6 +21,7 @@
     let configs = JSON.parse(localStorage.getItem(CONFIGS_KEY) || "[]");
     let genres = JSON.parse(localStorage.getItem(GENRES_KEY) || "[]");
     let searchQuery = "";
+    let genreSearchQuery = "";
 
     // =========================
     // FLOAT BUTTON
@@ -150,8 +151,12 @@
                     <button id="randomGenre">🎰 Random thể loại</button>
                     <button id="clearGenres">🗑 Xoá</button>
                 </div>
+                <div style="display:flex;gap:10px;margin-bottom:15px;">
+                    <input type="text" id="genreSearchInput" placeholder="🔍 Tìm kiếm thể loại..." style="flex:1; padding:10px; border-radius:8px; border:1px solid #7f5af0; background:#1a1a1a; color:white;">
+                    <button id="clearGenreSearchBtn" style="background:#dc2626; border:none; color:white; padding:10px 15px; border-radius:8px; cursor:pointer;">✕</button>
+                </div>
                 <div id="genreResultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
-                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng thể loại: <span id="genreCount">0</span></div>
+                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng thể loại: <span id="genreCount">0</span> <span id="genreSearchCount" style="display:none;"></span></div>
             </div>
             <div id="genreList" style="flex:1; overflow-y:auto; min-height:0;"></div>
         </div>
@@ -232,7 +237,7 @@
         .genreOpenBtn {
             background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
         }
-        #searchInput:focus { outline: 2px solid #7f5af0; }
+        #searchInput:focus, #genreSearchInput:focus { outline: 2px solid #7f5af0; }
     `;
     document.head.appendChild(style);
 
@@ -290,7 +295,7 @@
     tabConfigBtn.addEventListener("click", () => setActiveTab("config"));
 
     // =========================
-    // SEARCH FUNCTION
+    // SEARCH FUNCTION - MAIN
     // =========================
     const searchInput = document.getElementById("searchInput");
     const clearSearchBtn = document.getElementById("clearSearchBtn");
@@ -304,6 +309,23 @@
         searchInput.value = "";
         searchQuery = "";
         renderStories();
+    });
+
+    // =========================
+    // SEARCH FUNCTION - GENRE
+    // =========================
+    const genreSearchInput = document.getElementById("genreSearchInput");
+    const clearGenreSearchBtn = document.getElementById("clearGenreSearchBtn");
+
+    genreSearchInput.addEventListener("input", () => {
+        genreSearchQuery = genreSearchInput.value.trim().toLowerCase();
+        renderGenres();
+    });
+
+    clearGenreSearchBtn.addEventListener("click", () => {
+        genreSearchInput.value = "";
+        genreSearchQuery = "";
+        renderGenres();
     });
 
     // =========================
@@ -541,29 +563,66 @@
         renderGenres();
     });
 
+    // Xoá từng thể loại
+    function deleteGenre(index) {
+        if (confirm(`Xoá thể loại "${genres[index].name}"?`)) {
+            genres.splice(index, 1);
+            localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+            renderGenres();
+        }
+    }
+
     function renderGenres() {
         const list = document.getElementById("genreList");
-        document.getElementById("genreCount").innerText = genres.length;
+        const totalSpan = document.getElementById("genreCount");
+        const searchSpan = document.getElementById("genreSearchCount");
+        
+        let filteredGenres = genres;
+        if (genreSearchQuery) {
+            filteredGenres = genres.filter(g => 
+                g.name.toLowerCase().includes(genreSearchQuery)
+            );
+            searchSpan.style.display = "inline";
+            searchSpan.textContent = `| 🔍 ${filteredGenres.length} kết quả`;
+        } else {
+            searchSpan.style.display = "none";
+        }
+        
+        totalSpan.innerText = genres.length;
 
-        if (genres.length === 0) {
-            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có thể loại</div>`;
+        if (filteredGenres.length === 0) {
+            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">${genres.length === 0 ? 'Chưa có thể loại' : 'Không tìm thấy thể loại'}</div>`;
             return;
         }
 
-        list.innerHTML = genres.map((g, i) => `
+        list.innerHTML = filteredGenres.map((g, i) => {
+            const realIndex = genres.indexOf(g);
+            return `
             <div class="genreItem">
                 <span class="genreName" data-url="${g.url}"><b>${i + 1}.</b> ${g.name}</span>
-                <button class="genreOpenBtn" data-url="${g.url}">📖 Mở</button>
+                <div>
+                    <button class="storyBtn storyDeleteBtn" data-index="${realIndex}">🗑️</button>
+                    <button class="genreOpenBtn" data-url="${g.url}">📖</button>
+                </div>
             </div>
-        `).join("");
+        `}).join("");
 
         document.querySelectorAll('.genreName').forEach(el => {
             el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
         });
+        
         document.querySelectorAll('.genreOpenBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+        
+        document.querySelectorAll('.storyDeleteBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.getAttribute('data-index'));
+                deleteGenre(index);
             });
         });
     }
