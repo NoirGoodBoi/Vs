@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ViHentai Random Picker
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  Random truyện vi-hentai + Config + Thể loại
+// @version      20.0
+// @description  Random truyện vi-hentai + Config + Thể loại + Tìm kiếm + Sửa URL
 // @author       NoirNF
 // @match        https://vi-hentai.moe/*
 // @match        https://vi-hentai.pro/*
@@ -20,6 +20,7 @@
     let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     let configs = JSON.parse(localStorage.getItem(CONFIGS_KEY) || "[]");
     let genres = JSON.parse(localStorage.getItem(GENRES_KEY) || "[]");
+    let searchQuery = "";
 
     // =========================
     // FLOAT BUTTON
@@ -113,8 +114,12 @@
                     <button id="randomStory">🎰 Random</button>
                     <button id="clearStories">🗑 Xoá</button>
                 </div>
+                <div style="display:flex;gap:10px;margin-bottom:15px;">
+                    <input type="text" id="searchInput" placeholder="🔍 Tìm kiếm truyện..." style="flex:1; padding:10px; border-radius:8px; border:1px solid #7f5af0; background:#1a1a1a; color:white;">
+                    <button id="clearSearchBtn" style="background:#dc2626; border:none; color:white; padding:10px 15px; border-radius:8px; cursor:pointer;">✕</button>
+                </div>
                 <div id="resultBox" style="background:#1b1b1b;padding:15px;border-radius:12px;margin-bottom:15px;text-align:center;min-height:70px;display:flex;align-items:center;justify-content:center;border:1px solid #333;">Chưa random</div>
-                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span></div>
+                <div style="margin-bottom:10px;font-size:14px;color:#aaa;">Tổng truyện: <span id="storyCount">0</span> <span id="searchCount" style="display:none;"></span></div>
             </div>
             <div id="storyList" style="flex:1; overflow-y:auto; min-height:0;"></div>
         </div>
@@ -187,12 +192,22 @@
         .storyName, .genreName {
             flex:1; color:#2cb67d; text-decoration:none; cursor:pointer; word-break:break-word;
         }
-        .storyOpenBtn, .configBtn, .genreOpenBtn {
-            background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
+        .storyBtn {
+            background:#7f5af0; border:none; color:white; padding:5px 10px; border-radius:6px; cursor:pointer; font-size:11px; margin-left:5px;
         }
+        .storyDeleteBtn { background:#dc2626; }
+        .storyEditBtn { background:#f59e0b; }
+        .storyOpenBtn { background:#2cb67d; }
         .configDeleteBtn { background:#dc2626; }
         .configDownloadBtn { background:#2cb67d; }
         .configUploadBtn { background:#f59e0b; }
+        .configBtn {
+            background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
+        }
+        .genreOpenBtn {
+            background:#7f5af0; border:none; color:white; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; margin-left:5px;
+        }
+        #searchInput:focus { outline: 2px solid #7f5af0; }
     `;
     document.head.appendChild(style);
 
@@ -248,6 +263,23 @@
     tabMainBtn.addEventListener("click", () => setActiveTab("main"));
     tabGenreBtn.addEventListener("click", () => setActiveTab("genre"));
     tabConfigBtn.addEventListener("click", () => setActiveTab("config"));
+
+    // =========================
+    // SEARCH FUNCTION
+    // =========================
+    const searchInput = document.getElementById("searchInput");
+    const clearSearchBtn = document.getElementById("clearSearchBtn");
+
+    searchInput.addEventListener("input", () => {
+        searchQuery = searchInput.value.trim().toLowerCase();
+        renderStories();
+    });
+
+    clearSearchBtn.addEventListener("click", () => {
+        searchInput.value = "";
+        searchQuery = "";
+        renderStories();
+    });
 
     // =========================
     // MAIN TAB FUNCTIONS
@@ -309,29 +341,86 @@
         renderStories();
     });
 
+    // Xoá từng truyện
+    function deleteStory(index) {
+        if (confirm(`Xoá truyện "${stories[index].name}"?`)) {
+            stories.splice(index, 1);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+            renderStories();
+        }
+    }
+
+    // Sửa URL truyện
+    function editStory(index) {
+        const story = stories[index];
+        const newUrl = prompt(`Sửa URL cho "${story.name}":\n(Ví dụ: thêm /chap-1 vào cuối)`, story.url);
+        if (newUrl !== null && newUrl.trim() !== "") {
+            stories[index].url = newUrl.trim();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+            renderStories();
+        }
+    }
+
     function renderStories() {
         const list = document.getElementById("storyList");
-        document.getElementById("storyCount").innerText = stories.length;
+        const totalSpan = document.getElementById("storyCount");
+        const searchSpan = document.getElementById("searchCount");
+        
+        let filteredStories = stories;
+        if (searchQuery) {
+            filteredStories = stories.filter(s => 
+                s.name.toLowerCase().includes(searchQuery)
+            );
+            searchSpan.style.display = "inline";
+            searchSpan.textContent = `| 🔍 ${filteredStories.length} kết quả`;
+        } else {
+            searchSpan.style.display = "none";
+        }
+        
+        totalSpan.innerText = stories.length;
 
-        if (stories.length === 0) {
-            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">Chưa có truyện</div>`;
+        if (filteredStories.length === 0) {
+            list.innerHTML = `<div style="color:#777; text-align:center; padding:10px;">${stories.length === 0 ? 'Chưa có truyện' : 'Không tìm thấy truyện'}</div>`;
             return;
         }
 
-        list.innerHTML = stories.map((s, i) => `
+        list.innerHTML = filteredStories.map((s, i) => {
+            const realIndex = stories.indexOf(s);
+            return `
             <div class="storyItem">
                 <span class="storyName" data-url="${s.url}"><b>${i + 1}.</b> ${s.name}</span>
-                <button class="storyOpenBtn" data-url="${s.url}">📖 Mở</button>
+                <div>
+                    <button class="storyBtn storyDeleteBtn" data-index="${realIndex}">🗑️</button>
+                    <button class="storyBtn storyEditBtn" data-index="${realIndex}">✏️</button>
+                    <button class="storyBtn storyOpenBtn" data-url="${s.url}">📖</button>
+                </div>
             </div>
-        `).join("");
+        `}).join("");
 
         document.querySelectorAll('.storyName').forEach(el => {
             el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
         });
+        
         document.querySelectorAll('.storyOpenBtn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+        
+        document.querySelectorAll('.storyDeleteBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.getAttribute('data-index'));
+                deleteStory(index);
+            });
+        });
+        
+        document.querySelectorAll('.storyEditBtn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.getAttribute('data-index'));
+                editStory(index);
             });
         });
     }
@@ -340,7 +429,6 @@
     // GENRE TAB FUNCTIONS
     // =========================
     document.getElementById("getGenres").addEventListener("click", () => {
-        // Tìm tất cả link thể loại
         const genreLinks = document.querySelectorAll('a[href*="/the-loai/"]');
         let added = 0;
         const existing = new Set(genres.map(g => g.url));
@@ -350,7 +438,6 @@
                 const href = link.href;
                 if (existing.has(href)) return;
                 
-                // Lấy tên thể loại từ text hoặc từ URL
                 let name = link.textContent.trim();
                 if (!name || name.length === 0) {
                     const match = href.match(/\/the-loai\/([^/]+)/);
@@ -367,7 +454,6 @@
             } catch (err) {}
         });
         
-        // Nếu không tìm thấy qua selector, thử cách khác
         if (added === 0) {
             const allLinks = document.querySelectorAll('a');
             allLinks.forEach(link => {
