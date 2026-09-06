@@ -1,0 +1,864 @@
+// ==UserScript==
+// @name         ViHentai Random Picker
+// @namespace    http://tampermonkey.net/
+// @version      23.0
+// @description  Random truyện vi-hentai + Config + Thể loại + Tìm kiếm + Sửa URL
+// @author       NoirNF
+// @match        https://vi-hentai.moe/*
+// @match        https://vi-hentai.pro/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=vi-hentai.moe
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const STORAGE_KEY = "vih_random_stories";
+    const CONFIGS_KEY = "vih_configs";
+    const GENRES_KEY = "vih_genres";
+
+    let stories = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    let configs = JSON.parse(localStorage.getItem(CONFIGS_KEY) || "[]");
+    let genres = JSON.parse(localStorage.getItem(GENRES_KEY) || "[]");
+    let searchQuery = "";
+    let genreSearchQuery = "";
+
+    // =========================
+    // FLOAT BUTTON
+    // =========================
+    const btn = document.createElement("div");
+    btn.innerHTML = "👅";
+    btn.style.cssText = `
+        position:fixed;
+        right:20px;
+        bottom:100px;
+        width:60px;
+        height:60px;
+        border-radius:50%;
+        background:linear-gradient(135deg,#7f5af0,#2cb67d);
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        font-size:28px;
+        cursor:pointer;
+        z-index:999999;
+        box-shadow:0 0 20px rgba(127,90,240,0.4);
+        user-select:none;
+        touch-action:none;
+        transition:transform 0.2s;
+    `;
+    btn.onmouseover = () => btn.style.transform = "scale(1.1)";
+    btn.onmouseout = () => btn.style.transform = "scale(1)";
+    document.body.appendChild(btn);
+
+    let dragging = false, moved = false, offsetX = 0, offsetY = 0;
+    function startDrag(e) {
+        dragging = true;
+        moved = false;
+        const touch = e.touches ? e.touches[0] : e;
+        offsetX = touch.clientX - btn.offsetLeft;
+        offsetY = touch.clientY - btn.offsetTop;
+    }
+    function moveDrag(e) {
+        if (!dragging) return;
+        moved = true;
+        const touch = e.touches ? e.touches[0] : e;
+        btn.style.left = `${touch.clientX - offsetX}px`;
+        btn.style.top = `${touch.clientY - offsetY}px`;
+        btn.style.right = "auto";
+        btn.style.bottom = "auto";
+    }
+    function endDrag() { setTimeout(() => { dragging = false; }, 50); }
+    btn.addEventListener("mousedown", startDrag);
+    btn.addEventListener("touchstart", startDrag);
+    document.addEventListener("mousemove", moveDrag);
+    document.addEventListener("touchmove", moveDrag);
+    document.addEventListener("mouseup", endDrag);
+    document.addEventListener("touchend", endDrag);
+
+    // =========================
+    // PANEL
+    // =========================
+    const panel = document.createElement("div");
+    panel.style.cssText = `
+        position:fixed;
+        top:50%;
+        left:50%;
+        transform:translate(-50%,-50%);
+        width:92%;
+        max-width:520px;
+        max-height:85vh;
+        background:linear-gradient(145deg, #1a1a2e, #16213e);
+        border:1px solid rgba(127,90,240,0.3);
+        border-radius:24px;
+        padding:0;
+        z-index:999999;
+        color:#e0e0e0;
+        display:none;
+        box-shadow:0 25px 60px rgba(0,0,0,0.8), 0 0 40px rgba(127,90,240,0.1);
+        font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+        flex-direction:column;
+        overflow:hidden;
+    `;
+
+    panel.innerHTML = `
+        <!-- HEADER -->
+        <div style="flex-shrink:0; padding:18px 20px 12px 20px; background:rgba(0,0,0,0.3); border-bottom:1px solid rgba(255,255,255,0.05);">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <h2 id="dragHeader" style="margin:0; font-size:20px; font-weight:700; cursor:move; user-select:none; background:linear-gradient(135deg,#7f5af0,#2cb67d); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                    🎲 Random Truyện
+                </h2>
+                <button id="closePanelBtn" style="
+                    background:rgba(220,38,38,0.2);
+                    border:1px solid rgba(220,38,38,0.3);
+                    color:#ef4444;
+                    width:34px;
+                    height:34px;
+                    border-radius:50%;
+                    font-size:18px;
+                    cursor:pointer;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    font-weight:bold;
+                    transition:all 0.2s;
+                " 
+                onmouseover="this.style.background='rgba(220,38,38,0.4)'" 
+                onmouseout="this.style.background='rgba(220,38,38,0.2)'">✕</button>
+            </div>
+            
+            <!-- TABS -->
+            <div style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid rgba(255,255,255,0.06);">
+                <button id="tabMainBtn" style="
+                    flex:1;
+                    background:rgba(127,90,240,0.2);
+                    border:none;
+                    color:#c4b5fd;
+                    padding:10px 0;
+                    border-radius:12px 12px 0 0;
+                    font-size:13px;
+                    font-weight:600;
+                    cursor:pointer;
+                    transition:all 0.3s;
+                    border-bottom:2px solid #7f5af0;
+                ">🎯 Main</button>
+                <button id="tabGenreBtn" style="
+                    flex:1;
+                    background:transparent;
+                    border:none;
+                    color:#6b7280;
+                    padding:10px 0;
+                    border-radius:12px 12px 0 0;
+                    font-size:13px;
+                    font-weight:600;
+                    cursor:pointer;
+                    transition:all 0.3s;
+                    border-bottom:2px solid transparent;
+                ">🏷️ Thể loại</button>
+                <button id="tabConfigBtn" style="
+                    flex:1;
+                    background:transparent;
+                    border:none;
+                    color:#6b7280;
+                    padding:10px 0;
+                    border-radius:12px 12px 0 0;
+                    font-size:13px;
+                    font-weight:600;
+                    cursor:pointer;
+                    transition:all 0.3s;
+                    border-bottom:2px solid transparent;
+                ">⚙️ Config</button>
+            </div>
+        </div>
+
+        <!-- TAB MAIN -->
+        <div id="tabMain" style="flex:1; display:flex; flex-direction:column; min-height:0; padding:16px 20px 20px 20px;">
+            <div style="flex-shrink:0;">
+                <!-- Action Buttons -->
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                    <button id="getStories" style="flex:1; min-width:80px; background:#7f5af0; border:none; color:white; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.2s;">📚 Lấy truyện</button>
+                    <button id="randomStory" style="flex:1; min-width:80px; background:#2cb67d; border:none; color:white; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.2s;">🎰 Random</button>
+                    <button id="clearStories" style="flex:0.5; min-width:60px; background:rgba(220,38,38,0.2); border:1px solid rgba(220,38,38,0.3); color:#ef4444; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.2s;">🗑️</button>
+                </div>
+                
+                <!-- Search -->
+                <div style="display:flex; gap:8px; margin-bottom:12px;">
+                    <input type="text" id="searchInput" placeholder="🔍 Tìm truyện..." style="flex:1; padding:10px 14px; border-radius:12px; border:1px solid rgba(127,90,240,0.2); background:rgba(0,0,0,0.3); color:#e0e0e0; font-size:13px; outline:none; transition:border 0.3s;">
+                    <button id="clearSearchBtn" style="background:rgba(220,38,38,0.15); border:1px solid rgba(220,38,38,0.2); color:#ef4444; padding:10px 14px; border-radius:12px; cursor:pointer; font-size:13px; font-weight:600;">✕</button>
+                </div>
+                
+                <!-- Result Box -->
+                <div id="resultBox" style="background:rgba(0,0,0,0.3); padding:14px; border-radius:14px; margin-bottom:12px; text-align:center; min-height:60px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.05); font-size:14px; color:#9ca3af;">Chưa random</div>
+                
+                <!-- Count -->
+                <div style="display:flex; justify-content:space-between; margin-bottom:10px; font-size:13px; color:#6b7280; padding:0 4px;">
+                    <span>📚 Tổng: <span id="storyCount" style="color:#c4b5fd; font-weight:600;">0</span></span>
+                    <span id="searchCount" style="display:none; color:#2cb67d;">🔍 <span id="searchCountNum">0</span> kết quả</span>
+                </div>
+            </div>
+            
+            <!-- Story List -->
+            <div id="storyList" style="flex:1; overflow-y:auto; min-height:0; padding-right:4px;"></div>
+        </div>
+
+        <!-- TAB THỂ LOẠI -->
+        <div id="tabGenre" style="flex:1; display:none; flex-direction:column; min-height:0; padding:16px 20px 20px 20px;">
+            <div style="flex-shrink:0;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                    <button id="getGenres" style="flex:1; min-width:80px; background:#7f5af0; border:none; color:white; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer;">📚 Lấy thể loại</button>
+                    <button id="randomGenre" style="flex:1; min-width:80px; background:#2cb67d; border:none; color:white; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer;">🎰 Random</button>
+                    <button id="clearGenres" style="flex:0.5; min-width:60px; background:rgba(220,38,38,0.2); border:1px solid rgba(220,38,38,0.3); color:#ef4444; padding:10px 12px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer;">🗑️</button>
+                </div>
+                
+                <div style="display:flex; gap:8px; margin-bottom:12px;">
+                    <input type="text" id="genreSearchInput" placeholder="🔍 Tìm thể loại..." style="flex:1; padding:10px 14px; border-radius:12px; border:1px solid rgba(127,90,240,0.2); background:rgba(0,0,0,0.3); color:#e0e0e0; font-size:13px; outline:none;">
+                    <button id="clearGenreSearchBtn" style="background:rgba(220,38,38,0.15); border:1px solid rgba(220,38,38,0.2); color:#ef4444; padding:10px 14px; border-radius:12px; cursor:pointer; font-size:13px; font-weight:600;">✕</button>
+                </div>
+                
+                <div id="genreResultBox" style="background:rgba(0,0,0,0.3); padding:14px; border-radius:14px; margin-bottom:12px; text-align:center; min-height:60px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.05); font-size:14px; color:#9ca3af;">Chưa random</div>
+                
+                <div style="display:flex; justify-content:space-between; margin-bottom:10px; font-size:13px; color:#6b7280; padding:0 4px;">
+                    <span>🏷️ Tổng: <span id="genreCount" style="color:#c4b5fd; font-weight:600;">0</span></span>
+                    <span id="genreSearchCount" style="display:none; color:#2cb67d;">🔍 <span id="genreSearchCountNum">0</span> kết quả</span>
+                </div>
+            </div>
+            
+            <div id="genreList" style="flex:1; overflow-y:auto; min-height:0; padding-right:4px;"></div>
+        </div>
+
+        <!-- TAB CONFIG -->
+        <div id="tabConfig" style="flex:1; display:none; flex-direction:column; min-height:0; padding:16px 20px 20px 20px;">
+            <div style="flex-shrink:0;">
+                <div style="display:flex; gap:8px; margin-bottom:14px;">
+                    <input type="text" id="configNameInput" placeholder="Tên config..." style="flex:2; padding:10px 14px; border-radius:12px; border:1px solid rgba(127,90,240,0.2); background:rgba(0,0,0,0.3); color:#e0e0e0; font-size:13px; outline:none;">
+                    <button id="saveConfigBtn" style="flex:1; background:#7f5af0; border:none; color:white; padding:10px 14px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer;">💾 Lưu</button>
+                </div>
+                <div style="margin-bottom:10px; font-size:13px; color:#6b7280; padding:0 4px;">📋 Danh sách config:</div>
+            </div>
+            <div id="configList" style="flex:1; overflow-y:auto; min-height:0; padding-right:4px;"></div>
+        </div>
+    `;
+    document.body.appendChild(panel);
+
+    // =========================
+    // CLOSE PANEL BUTTON
+    // =========================
+    document.getElementById("closePanelBtn").addEventListener("click", () => {
+        panel.style.display = "none";
+    });
+
+    // =========================
+    // DRAG PANEL
+    // =========================
+    let panelDragging = false, panelOffsetX = 0, panelOffsetY = 0;
+    const dragHeader = panel.querySelector("#dragHeader");
+    dragHeader.addEventListener("mousedown", startPanelDrag);
+    dragHeader.addEventListener("touchstart", startPanelDrag);
+    function startPanelDrag(e) {
+        panelDragging = true;
+        const touch = e.touches ? e.touches[0] : e;
+        const rect = panel.getBoundingClientRect();
+        panelOffsetX = touch.clientX - rect.left;
+        panelOffsetY = touch.clientY - rect.top;
+        panel.style.transform = "none";
+    }
+    function movePanel(e) {
+        if (!panelDragging) return;
+        const touch = e.touches ? e.touches[0] : e;
+        panel.style.left = `${touch.clientX - panelOffsetX}px`;
+        panel.style.top = `${touch.clientY - panelOffsetY}px`;
+    }
+    document.addEventListener("mousemove", movePanel);
+    document.addEventListener("touchmove", movePanel);
+    document.addEventListener("mouseup", () => panelDragging = false);
+    document.addEventListener("touchend", () => panelDragging = false);
+
+    // =========================
+    // STYLE - Card Styles
+    // =========================
+    const style = document.createElement("style");
+    style.innerHTML = `
+        /* Scrollbar */
+        #storyList::-webkit-scrollbar, #genreList::-webkit-scrollbar, #configList::-webkit-scrollbar {
+            width: 4px;
+        }
+        #storyList::-webkit-scrollbar-track, #genreList::-webkit-scrollbar-track, #configList::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        #storyList::-webkit-scrollbar-thumb, #genreList::-webkit-scrollbar-thumb, #configList::-webkit-scrollbar-thumb {
+            background: rgba(127,90,240,0.4);
+            border-radius: 10px;
+        }
+        
+        /* Story Card */
+        .story-card, .genre-card, .config-card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.25s ease;
+            backdrop-filter: blur(4px);
+        }
+        .story-card:hover, .genre-card:hover, .config-card:hover {
+            background: rgba(255,255,255,0.07);
+            border-color: rgba(127,90,240,0.2);
+            transform: translateX(4px);
+        }
+        
+        .story-name, .genre-name {
+            flex: 1;
+            color: #e5e7eb;
+            cursor: pointer;
+            word-break: break-word;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 2px 0;
+        }
+        .story-name:hover, .genre-name:hover {
+            color: #a78bfa;
+        }
+        
+        .story-number, .genre-number {
+            color: #6b7280;
+            font-weight: 600;
+            margin-right: 10px;
+            font-size: 13px;
+            min-width: 28px;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 5px;
+            flex-shrink: 0;
+            margin-left: 8px;
+        }
+        
+        .btn-icon {
+            background: rgba(255,255,255,0.06);
+            border: none;
+            color: #9ca3af;
+            padding: 5px 9px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            line-height: 1;
+        }
+        .btn-icon:hover {
+            background: rgba(255,255,255,0.12);
+            transform: scale(1.05);
+        }
+        .btn-delete { color: #ef4444; }
+        .btn-delete:hover { background: rgba(220,38,38,0.2); }
+        .btn-edit { color: #f59e0b; }
+        .btn-edit:hover { background: rgba(245,158,11,0.2); }
+        .btn-open { color: #2cb67d; }
+        .btn-open:hover { background: rgba(44,182,125,0.2); }
+        .btn-download { color: #60a5fa; }
+        .btn-download:hover { background: rgba(96,165,250,0.2); }
+        .btn-upload { color: #f59e0b; }
+        .btn-upload:hover { background: rgba(245,158,11,0.2); }
+        
+        .config-name {
+            flex: 1;
+            color: #e5e7eb;
+            word-break: break-word;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        /* Responsive */
+        @media (max-width: 480px) {
+            .story-name, .genre-name, .config-name { font-size: 13px; }
+            .btn-icon { padding: 4px 7px; font-size: 12px; }
+            .story-card, .genre-card, .config-card { padding: 10px 12px; }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // =========================
+    // TOGGLE PANEL
+    // =========================
+    btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (moved) return;
+        if (panel.style.display === "none" || panel.style.display === "") {
+            panel.style.display = "flex";
+            renderStories();
+            renderGenres();
+            renderConfigs();
+        } else {
+            panel.style.display = "none";
+        }
+    });
+
+    // =========================
+    // TAB SWITCHING
+    // =========================
+    const tabMain = document.getElementById("tabMain");
+    const tabGenre = document.getElementById("tabGenre");
+    const tabConfig = document.getElementById("tabConfig");
+    const tabMainBtn = document.getElementById("tabMainBtn");
+    const tabGenreBtn = document.getElementById("tabGenreBtn");
+    const tabConfigBtn = document.getElementById("tabConfigBtn");
+
+    function setActiveTab(active) {
+        tabMain.style.display = "none";
+        tabGenre.style.display = "none";
+        tabConfig.style.display = "none";
+        
+        const resetStyle = (btn) => {
+            btn.style.background = "transparent";
+            btn.style.color = "#6b7280";
+            btn.style.borderBottom = "2px solid transparent";
+        };
+        resetStyle(tabMainBtn);
+        resetStyle(tabGenreBtn);
+        resetStyle(tabConfigBtn);
+        
+        if (active === "main") {
+            tabMain.style.display = "flex";
+            tabMainBtn.style.background = "rgba(127,90,240,0.2)";
+            tabMainBtn.style.color = "#c4b5fd";
+            tabMainBtn.style.borderBottom = "2px solid #7f5af0";
+            renderStories();
+        } else if (active === "genre") {
+            tabGenre.style.display = "flex";
+            tabGenreBtn.style.background = "rgba(127,90,240,0.2)";
+            tabGenreBtn.style.color = "#c4b5fd";
+            tabGenreBtn.style.borderBottom = "2px solid #7f5af0";
+            renderGenres();
+        } else if (active === "config") {
+            tabConfig.style.display = "flex";
+            tabConfigBtn.style.background = "rgba(127,90,240,0.2)";
+            tabConfigBtn.style.color = "#c4b5fd";
+            tabConfigBtn.style.borderBottom = "2px solid #7f5af0";
+            renderConfigs();
+        }
+    }
+
+    tabMainBtn.addEventListener("click", () => setActiveTab("main"));
+    tabGenreBtn.addEventListener("click", () => setActiveTab("genre"));
+    tabConfigBtn.addEventListener("click", () => setActiveTab("config"));
+
+    // =========================
+    // SEARCH FUNCTIONS
+    // =========================
+    const searchInput = document.getElementById("searchInput");
+    const clearSearchBtn = document.getElementById("clearSearchBtn");
+    searchInput.addEventListener("input", () => {
+        searchQuery = searchInput.value.trim().toLowerCase();
+        renderStories();
+    });
+    clearSearchBtn.addEventListener("click", () => {
+        searchInput.value = "";
+        searchQuery = "";
+        renderStories();
+    });
+
+    const genreSearchInput = document.getElementById("genreSearchInput");
+    const clearGenreSearchBtn = document.getElementById("clearGenreSearchBtn");
+    genreSearchInput.addEventListener("input", () => {
+        genreSearchQuery = genreSearchInput.value.trim().toLowerCase();
+        renderGenres();
+    });
+    clearGenreSearchBtn.addEventListener("click", () => {
+        genreSearchInput.value = "";
+        genreSearchQuery = "";
+        renderGenres();
+    });
+
+    // =========================
+    // MAIN TAB FUNCTIONS
+    // =========================
+    document.getElementById("getStories").addEventListener("click", () => {
+        const cards = document.querySelectorAll('a[href*="/truyen/"]');
+        let added = 0;
+        const existing = new Set(stories.map(s => s.url));
+        cards.forEach(card => {
+            try {
+                const path = new URL(card.href).pathname;
+                const match = path.match(/\/truyen\/([^/]+)/);
+                if (!match) return;
+                const slug = match[1];
+                const storyUrl = location.origin + "/truyen/" + slug;
+                if (existing.has(storyUrl)) return;
+                existing.add(storyUrl);
+                const name = slug.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()).trim();
+                stories.push({ name, url: card.href });
+                added++;
+            } catch (err) {}
+        });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+        renderStories();
+        alert(`✅ Đã thêm ${added} truyện`);
+    });
+
+    document.getElementById("randomStory").addEventListener("click", () => {
+        if (stories.length === 0) {
+            alert("📭 Chưa có truyện!");
+            return;
+        }
+
+        const resultBox = document.getElementById("resultBox");
+        resultBox.innerHTML = "🎰 Đang random...";
+        let count = 0;
+
+        const interval = setInterval(() => {
+            const random = stories[Math.floor(Math.random() * stories.length)];
+            resultBox.innerHTML = `<div style="font-size:17px; color:#a78bfa; font-weight:500;">${random.name}</div>`;
+            count++;
+            if (count >= 20) {
+                clearInterval(interval);
+                const final = stories[Math.floor(Math.random() * stories.length)];
+                resultBox.innerHTML = `
+                    <div>
+                        <div style="font-size:20px; color:#2cb67d; margin-bottom:6px; font-weight:700;">🎉 ${final.name}</div>
+                        <a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:14px; font-weight:500;">📖 Mở truyện →</a>
+                    </div>
+                `;
+            }
+        }, 80);
+    });
+
+    document.getElementById("clearStories").addEventListener("click", () => {
+        if (!confirm("🗑️ Xoá toàn bộ truyện?")) return;
+        stories = [];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+        renderStories();
+    });
+
+    function deleteStory(index) {
+        if (confirm(`🗑️ Xoá "${stories[index].name}"?`)) {
+            stories.splice(index, 1);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+            renderStories();
+        }
+    }
+
+    function editStory(index) {
+        const story = stories[index];
+        const newUrl = prompt(`✏️ Sửa URL cho "${story.name}":`, story.url);
+        if (newUrl !== null && newUrl.trim() !== "") {
+            stories[index].url = newUrl.trim();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+            renderStories();
+        }
+    }
+
+    function renderStories() {
+        const list = document.getElementById("storyList");
+        const totalSpan = document.getElementById("storyCount");
+        const searchSpan = document.getElementById("searchCount");
+        const searchCountNum = document.getElementById("searchCountNum");
+        
+        let filteredStories = stories;
+        if (searchQuery) {
+            filteredStories = stories.filter(s => 
+                s.name.toLowerCase().includes(searchQuery)
+            );
+            searchSpan.style.display = "inline";
+            searchCountNum.textContent = filteredStories.length;
+        } else {
+            searchSpan.style.display = "none";
+        }
+        
+        totalSpan.innerText = stories.length;
+
+        if (filteredStories.length === 0) {
+            list.innerHTML = `<div style="color:#6b7280; text-align:center; padding:30px 10px; font-size:14px;">${stories.length === 0 ? '📭 Chưa có truyện' : '🔍 Không tìm thấy'}</div>`;
+            return;
+        }
+
+        list.innerHTML = filteredStories.map((s, i) => {
+            const realIndex = stories.indexOf(s);
+            return `
+            <div class="story-card">
+                <div style="display:flex; align-items:center; flex:1; min-width:0;">
+                    <span class="story-number">${i + 1}.</span>
+                    <span class="story-name" data-url="${s.url}">${s.name}</span>
+                </div>
+                <div class="btn-group">
+                    <button class="btn-icon btn-delete" data-index="${realIndex}" title="Xoá">🗑️</button>
+                    <button class="btn-icon btn-edit" data-index="${realIndex}" title="Sửa URL">✏️</button>
+                    <button class="btn-icon btn-open" data-url="${s.url}" title="Mở">📖</button>
+                </div>
+            </div>
+        `}).join("");
+
+        document.querySelectorAll('.story-name').forEach(el => {
+            el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
+        });
+        document.querySelectorAll('.btn-open').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+        document.querySelectorAll('.btn-delete').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteStory(parseInt(btn.getAttribute('data-index')));
+            });
+        });
+        document.querySelectorAll('.btn-edit').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                editStory(parseInt(btn.getAttribute('data-index')));
+            });
+        });
+    }
+
+    // =========================
+    // GENRE TAB FUNCTIONS
+    // =========================
+    document.getElementById("getGenres").addEventListener("click", () => {
+        const genreLinks = document.querySelectorAll('a[href*="/the-loai/"]');
+        let added = 0;
+        const existing = new Set(genres.map(g => g.url));
+        
+        genreLinks.forEach(link => {
+            try {
+                const href = link.href;
+                if (existing.has(href)) return;
+                let name = link.textContent.trim();
+                if (!name || name.length === 0) {
+                    const match = href.match(/\/the-loai\/([^/]+)/);
+                    if (match) {
+                        name = match[1].replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                    }
+                }
+                if (name && href) {
+                    genres.push({ name, url: href });
+                    existing.add(href);
+                    added++;
+                }
+            } catch (err) {}
+        });
+        
+        if (added === 0) {
+            const allLinks = document.querySelectorAll('a');
+            allLinks.forEach(link => {
+                try {
+                    const href = link.href;
+                    if (href && href.includes('/the-loai/') && !existing.has(href)) {
+                        let name = link.textContent.trim();
+                        if (!name || name.length === 0 || name.length > 50) {
+                            const match = href.match(/\/the-loai\/([^/]+)/);
+                            if (match) {
+                                name = match[1].replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                            }
+                        }
+                        if (name && name.length > 0 && name.length < 50) {
+                            genres.push({ name, url: href });
+                            existing.add(href);
+                            added++;
+                        }
+                    }
+                } catch (err) {}
+            });
+        }
+        
+        localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+        renderGenres();
+        alert(`✅ Đã thêm ${added} thể loại`);
+    });
+
+    document.getElementById("randomGenre").addEventListener("click", () => {
+        if (genres.length === 0) {
+            alert("📭 Chưa có thể loại!");
+            return;
+        }
+
+        const genreResultBox = document.getElementById("genreResultBox");
+        genreResultBox.innerHTML = "🎰 Đang random...";
+        let count = 0;
+
+        const interval = setInterval(() => {
+            const random = genres[Math.floor(Math.random() * genres.length)];
+            genreResultBox.innerHTML = `<div style="font-size:17px; color:#a78bfa; font-weight:500;">${random.name}</div>`;
+            count++;
+            if (count >= 20) {
+                clearInterval(interval);
+                const final = genres[Math.floor(Math.random() * genres.length)];
+                genreResultBox.innerHTML = `
+                    <div>
+                        <div style="font-size:20px; color:#2cb67d; margin-bottom:6px; font-weight:700;">🎉 ${final.name}</div>
+                        <a href="${final.url}" target="_blank" style="color:#7f5af0; text-decoration:none; font-size:14px; font-weight:500;">📖 Mở thể loại →</a>
+                    </div>
+                `;
+            }
+        }, 80);
+    });
+
+    document.getElementById("clearGenres").addEventListener("click", () => {
+        if (!confirm("🗑️ Xoá toàn bộ thể loại?")) return;
+        genres = [];
+        localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+        renderGenres();
+    });
+
+    function deleteGenre(index) {
+        if (confirm(`🗑️ Xoá "${genres[index].name}"?`)) {
+            genres.splice(index, 1);
+            localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+            renderGenres();
+        }
+    }
+
+    function renderGenres() {
+        const list = document.getElementById("genreList");
+        const totalSpan = document.getElementById("genreCount");
+        const searchSpan = document.getElementById("genreSearchCount");
+        const searchCountNum = document.getElementById("genreSearchCountNum");
+        
+        let filteredGenres = genres;
+        if (genreSearchQuery) {
+            filteredGenres = genres.filter(g => 
+                g.name.toLowerCase().includes(genreSearchQuery)
+            );
+            searchSpan.style.display = "inline";
+            searchCountNum.textContent = filteredGenres.length;
+        } else {
+            searchSpan.style.display = "none";
+        }
+        
+        totalSpan.innerText = genres.length;
+
+        if (filteredGenres.length === 0) {
+            list.innerHTML = `<div style="color:#6b7280; text-align:center; padding:30px 10px; font-size:14px;">${genres.length === 0 ? '📭 Chưa có thể loại' : '🔍 Không tìm thấy'}</div>`;
+            return;
+        }
+
+        list.innerHTML = filteredGenres.map((g, i) => {
+            const realIndex = genres.indexOf(g);
+            return `
+            <div class="genre-card">
+                <div style="display:flex; align-items:center; flex:1; min-width:0;">
+                    <span class="genre-number">${i + 1}.</span>
+                    <span class="genre-name" data-url="${g.url}">${g.name}</span>
+                </div>
+                <div class="btn-group">
+                    <button class="btn-icon btn-delete" data-index="${realIndex}" title="Xoá">🗑️</button>
+                    <button class="btn-icon btn-open" data-url="${g.url}" title="Mở">📖</button>
+                </div>
+            </div>
+        `}).join("");
+
+        document.querySelectorAll('.genre-name').forEach(el => {
+            el.addEventListener('click', () => window.open(el.getAttribute('data-url'), '_blank'));
+        });
+        document.querySelectorAll('.btn-open').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(btn.getAttribute('data-url'), '_blank');
+            });
+        });
+        document.querySelectorAll('.btn-delete').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteGenre(parseInt(btn.getAttribute('data-index')));
+            });
+        });
+    }
+
+    // =========================
+    // CONFIG TAB FUNCTIONS
+    // =========================
+    function saveConfigs() {
+        localStorage.setItem(CONFIGS_KEY, JSON.stringify(configs));
+    }
+
+    function renderConfigs() {
+        const list = document.getElementById("configList");
+
+        if (configs.length === 0) {
+            list.innerHTML = `<div style="color:#6b7280; text-align:center; padding:30px 10px; font-size:14px;">📭 Chưa có config nào</div>`;
+            return;
+        }
+
+        list.innerHTML = configs.map((config, index) => `
+            <div class="config-card">
+                <span class="config-name"><b style="color:#6b7280; margin-right:6px;">${index + 1}.</b> ${config.name}</span>
+                <div class="btn-group">
+                    <button class="btn-icon btn-delete" data-index="${index}" title="Xoá">🗑️</button>
+                    <button class="btn-icon btn-upload" data-index="${index}" title="Cập nhật config">📤</button>
+                    <button class="btn-icon btn-download" data-index="${index}" title="Tải config">📥</button>
+                </div>
+            </div>
+        `).join("");
+
+        document.querySelectorAll('.config-card .btn-delete').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                if (confirm(`🗑️ Xóa config "${configs[index].name}"?`)) {
+                    configs.splice(index, 1);
+                    saveConfigs();
+                    renderConfigs();
+                }
+            });
+        });
+
+        document.querySelectorAll('.config-card .btn-upload').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                configs[index].stories = JSON.parse(JSON.stringify(stories));
+                saveConfigs();
+                alert(`✅ Đã cập nhật "${configs[index].name}" với ${stories.length} truyện`);
+                renderConfigs();
+            });
+        });
+
+        document.querySelectorAll('.config-card .btn-download').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const index = parseInt(btn.getAttribute('data-index'));
+                const loadedStories = configs[index].stories;
+                if (loadedStories && loadedStories.length > 0) {
+                    stories = JSON.parse(JSON.stringify(loadedStories));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+                    renderStories();
+                    alert(`✅ Đã tải "${configs[index].name}" với ${stories.length} truyện`);
+                } else {
+                    alert("📭 Config này không có truyện!");
+                }
+            });
+        });
+    }
+
+    document.getElementById("saveConfigBtn").addEventListener("click", () => {
+        const nameInput = document.getElementById("configNameInput");
+        const name = nameInput.value.trim();
+        
+        if (!name) {
+            alert("⚠️ Vui lòng nhập tên config");
+            return;
+        }
+        if (stories.length === 0) {
+            alert("📭 Chưa có truyện để lưu!");
+            return;
+        }
+        
+        const existing = configs.find(c => c.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+            if (!confirm(`📝 "${name}" đã tồn tại. Cập nhật lại?`)) return;
+            existing.stories = JSON.parse(JSON.stringify(stories));
+        } else {
+            configs.push({ name, stories: JSON.parse(JSON.stringify(stories)) });
+        }
+        
+        saveConfigs();
+        nameInput.value = "";
+        renderConfigs();
+        alert(`✅ Đã lưu "${name}" với ${stories.length} truyện`);
+        setActiveTab("config");
+    });
+
+    panel.style.display = "none";
+    renderStories();
+    renderGenres();
+    renderConfigs();
+})();
